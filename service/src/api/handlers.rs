@@ -7,6 +7,7 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
+use tokio::time::{sleep, Duration};
 use tracing::{error, info, warn};
 
 use crate::api::types::{
@@ -152,7 +153,25 @@ pub async fn trigger_source_scan(
         return Err(bad_request("当前 source 已有扫描任务在执行或排队"));
     }
 
-    let job_id = enqueue_scan_job(state.clone(), source, "manual")
+    let task_job_id = create_scan_task_job(
+        state.clone(),
+        &source.id,
+        "manual",
+        json!({"source_id": source.id}),
+    )
+    .await
+    .map_err(|msg| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                code: 500,
+                message: msg,
+                data: json!({}),
+            }),
+        )
+    })?;
+
+    let job_id = execute_scan_task_job(state.clone(), &task_job_id)
         .await
         .map_err(|msg| {
             (
@@ -223,47 +242,24 @@ pub async fn trigger_source_scan_fs_watch(
         return Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id })));
     }
 
-    let now = Utc::now().to_rfc3339();
     let payload = json!({
         "source_id": source.id,
         "changed_paths": req.changed_paths,
     });
-    let task_job_id = sha256_hex(&format!("task:fs_watch:{}:{}", source.id, now));
-    sqlx::query(
-        "INSERT INTO task_jobs (
-            id, job_type, trigger_type, status,
-            payload_json, checkpoint_json,
-            progress_done, progress_total,
-            retry_count, max_retries,
-            error_message, run_after,
-            started_at, finished_at,
-            created_at, updated_at
-         ) VALUES (
-            ?, 'scan', 'fs_watch', 'pending',
-            ?, NULL,
-            0, NULL,
-            0, 3,
-            NULL, ?,
-            NULL, NULL,
-            ?, ?
-         )",
-    )
-    .bind(&task_job_id)
-    .bind(payload.to_string())
-    .bind(&now)
-    .bind(&now)
-    .bind(&now)
-    .execute(&state.pool)
-    .await
-    .map_err(|err| {
-        internal_db_error(
-            "trigger_source_scan_fs_watch.insert_task",
-            json!({"task_job_id": task_job_id, "source_id": source.id}),
-            err,
-        )
-    })?;
+    let task_job_id = create_scan_task_job(state.clone(), &source.id, "fs_watch", payload)
+        .await
+        .map_err(|msg| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    code: 500,
+                    message: msg,
+                    data: json!({}),
+                }),
+            )
+        })?;
 
-    let job_id = enqueue_scan_job(state.clone(), source, "fs_watch")
+    let job_id = execute_scan_task_job(state.clone(), &task_job_id)
         .await
         .map_err(|msg| {
             (
@@ -442,7 +438,25 @@ pub async fn retry_scan_job(
         return Err(bad_request("当前 source 已有扫描任务在执行或排队"));
     }
 
-    let new_job_id = enqueue_scan_job(state.clone(), source, "retry")
+    let task_job_id = create_scan_task_job(
+        state.clone(),
+        &source.id,
+        "retry",
+        json!({"source_id": source.id, "retry_from_job_id": job_id}),
+    )
+    .await
+    .map_err(|msg| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                code: 500,
+                message: msg,
+                data: json!({}),
+            }),
+        )
+    })?;
+
+    let new_job_id = execute_scan_task_job(state.clone(), &task_job_id)
         .await
         .map_err(|msg| {
             (
@@ -1309,6 +1323,193 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
             data: json!({}),
         }),
     )
+}
+
+pub fn start_task_dispatcher(state: Arc<AppState>) {
+    let interval_ms = state.config.scan.task_dispatch_interval_ms.max(200);
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = dispatch_one_pending_scan_task(state.clone()).await {
+                error!(error = %e, "task dispatcher iteration failed");
+            }
+            sleep(Duration::from_millis(interval_ms)).await;
+        }
+    });
+}
+
+async fn dispatch_one_pending_scan_task(state: Arc<AppState>) -> Result<(), String> {
+    let task_id: Option<String> = sqlx::query_scalar(
+        "SELECT id
+         FROM task_jobs
+         WHERE job_type = 'scan' AND status = 'pending' AND (run_after IS NULL OR run_after <= ?)
+         ORDER BY created_at ASC
+         LIMIT 1",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("failed to fetch pending scan task: {}", e))?;
+
+    if let Some(task_id) = task_id {
+        let _ = execute_scan_task_job(state, &task_id).await?;
+    }
+
+    Ok(())
+}
+
+async fn create_scan_task_job(
+    state: Arc<AppState>,
+    source_id: &str,
+    trigger_type: &str,
+    payload: Value,
+) -> Result<String, String> {
+    let now = Utc::now().to_rfc3339();
+    let task_job_id = sha256_hex(&format!("task:{}:{}:{}", trigger_type, source_id, now));
+    sqlx::query(
+        "INSERT INTO task_jobs (
+            id, job_type, trigger_type, status,
+            payload_json, checkpoint_json,
+            progress_done, progress_total,
+            retry_count, max_retries,
+            error_message, run_after,
+            started_at, finished_at,
+            created_at, updated_at
+         ) VALUES (
+            ?, 'scan', ?, 'pending',
+            ?, NULL,
+            0, NULL,
+            0, 3,
+            NULL, ?,
+            NULL, NULL,
+            ?, ?
+         )",
+    )
+    .bind(&task_job_id)
+    .bind(trigger_type)
+    .bind(payload.to_string())
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        format!(
+            "failed to create scan task job (task_id={}, source_id={}, trigger_type={}): {}",
+            task_job_id, source_id, trigger_type, e
+        )
+    })?;
+
+    Ok(task_job_id)
+}
+
+async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Result<String, String> {
+    let task_row = sqlx::query(
+        "SELECT id, status, trigger_type, payload_json
+         FROM task_jobs
+         WHERE id = ? AND job_type = 'scan'",
+    )
+    .bind(task_job_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("failed to fetch scan task job {}: {}", task_job_id, e))?
+    .ok_or_else(|| format!("scan task job not found: {}", task_job_id))?;
+
+    let status: String = task_row.get("status");
+    if status != "pending" {
+        let checkpoint_json: Option<String> = sqlx::query_scalar(
+            "SELECT checkpoint_json FROM task_jobs WHERE id = ?",
+        )
+        .bind(task_job_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| format!("failed to get checkpoint for task {}: {}", task_job_id, e))?
+        .flatten();
+
+        if let Some(checkpoint_json) = checkpoint_json {
+            let parsed: Value = serde_json::from_str(&checkpoint_json).unwrap_or_else(|_| json!({}));
+            if let Some(scan_job_id) = parsed.get("scan_job_id").and_then(|v| v.as_str()) {
+                return Ok(scan_job_id.to_string());
+            }
+        }
+
+        return Err(format!("task {} is not pending, status={}", task_job_id, status));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let transitioned = sqlx::query(
+        "UPDATE task_jobs
+         SET status = 'running', started_at = ?, updated_at = ?
+         WHERE id = ? AND status = 'pending'",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(task_job_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("failed to set task {} running: {}", task_job_id, e))?;
+
+    if transitioned.rows_affected() == 0 {
+        return Err(format!("task {} status changed by other worker", task_job_id));
+    }
+
+    let trigger_type: String = task_row.get("trigger_type");
+    let payload_json: Option<String> = task_row.get("payload_json");
+    let payload: Value = payload_json
+        .as_deref()
+        .and_then(|v| serde_json::from_str(v).ok())
+        .unwrap_or_else(|| json!({}));
+    let source_id = payload
+        .get("source_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("task {} missing source_id", task_job_id))?;
+
+    let source = sqlx::query_as::<_, Source>(
+        "SELECT id, name, root_path, source_type, enabled, created_at, updated_at
+         FROM sources
+         WHERE id = ?",
+    )
+    .bind(source_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| format!("failed to load source {} for task {}: {}", source_id, task_job_id, e))?
+    .ok_or_else(|| format!("source not found for task {}: {}", task_job_id, source_id))?;
+
+    let scan_job_id = match enqueue_scan_job(state.clone(), source, &trigger_type).await {
+        Ok(v) => v,
+        Err(e) => {
+            let failed_at = Utc::now().to_rfc3339();
+            let _ = sqlx::query(
+                "UPDATE task_jobs
+                 SET status = 'failed', error_message = ?, finished_at = ?, updated_at = ?
+                 WHERE id = ?",
+            )
+            .bind(&e)
+            .bind(&failed_at)
+            .bind(&failed_at)
+            .bind(task_job_id)
+            .execute(&state.pool)
+            .await;
+            return Err(e);
+        }
+    };
+
+    let done_at = Utc::now().to_rfc3339();
+    let checkpoint = json!({"scan_job_id": scan_job_id});
+    sqlx::query(
+        "UPDATE task_jobs
+         SET status = 'success', checkpoint_json = ?, progress_done = 1, progress_total = 1,
+             finished_at = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(checkpoint.to_string())
+    .bind(&done_at)
+    .bind(&done_at)
+    .bind(task_job_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("failed to mark task {} success: {}", task_job_id, e))?;
+
+    Ok(scan_job_id)
 }
 
 async fn enqueue_scan_job(

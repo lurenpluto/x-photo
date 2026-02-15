@@ -44,6 +44,7 @@ pub struct ScanConfig {
     pub max_concurrent_jobs: usize,
     pub checkpoint_every: usize,
     pub resume_enabled: bool,
+    pub task_dispatch_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +85,7 @@ impl Default for AppConfig {
                 max_concurrent_jobs: 2,
                 checkpoint_every: 50,
                 resume_enabled: true,
+                task_dispatch_interval_ms: 2000,
             },
             album_rules: AlbumRulesConfig {
                 enabled: true,
@@ -145,6 +147,7 @@ impl Default for ScanConfig {
             max_concurrent_jobs: 2,
             checkpoint_every: 50,
             resume_enabled: true,
+            task_dispatch_interval_ms: 2000,
         }
     }
 }

@@ -24,6 +24,8 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         scan_limiter: Arc::new(Semaphore::new(limiter_size)),
     });
 
+    handlers::start_task_dispatcher(state.clone());
+
     Router::new()
         .route("/rpc/v1/health", get(handlers::health))
         .route("/rpc/v1/sources", get(handlers::list_sources).post(handlers::create_source))
