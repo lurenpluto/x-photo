@@ -1423,6 +1423,9 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
             if let Err(e) = dispatch_one_pending_scan_task(state.clone()).await {
                 error!(error = %e, "task dispatcher iteration failed");
             }
+            if let Err(e) = reconcile_scan_task_statuses(state.clone()).await {
+                error!(error = %e, "scan task reconcile iteration failed");
+            }
             sleep(Duration::from_millis(interval_ms)).await;
         }
     });
@@ -1443,6 +1446,82 @@ async fn dispatch_one_pending_scan_task(state: Arc<AppState>) -> Result<(), Stri
 
     if let Some(task_id) = task_id {
         let _ = execute_scan_task_job(state, &task_id).await?;
+    }
+
+    Ok(())
+}
+
+async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String> {
+    let rows = sqlx::query(
+        "SELECT tj.id AS task_id, tj.status AS task_status, tj.scan_job_id,
+                sj.status AS scan_status, sj.processed_count, sj.total_count,
+                sj.error_message, sj.finished_at
+         FROM task_jobs tj
+         INNER JOIN scan_jobs sj ON sj.id = tj.scan_job_id
+         WHERE tj.job_type = 'scan'
+           AND tj.status IN ('pending', 'running')",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("failed to reconcile scan task statuses: {}", e))?;
+
+    for row in rows {
+        let task_id: String = row.get("task_id");
+        let task_status: String = row.get("task_status");
+        let scan_job_id: String = row.get("scan_job_id");
+        let scan_status: String = row.get("scan_status");
+        let processed_count: i64 = row.get("processed_count");
+        let total_count: Option<i64> = row.get("total_count");
+        let error_message: Option<String> = row.get("error_message");
+        let finished_at: Option<String> = row.get("finished_at");
+
+        let now = Utc::now().to_rfc3339();
+        if scan_status == "pending" || scan_status == "running" {
+            if task_status == "pending" {
+                let checkpoint = json!({
+                    "scan_job_id": scan_job_id,
+                    "scan_status": scan_status,
+                });
+                sqlx::query(
+                    "UPDATE task_jobs
+                     SET status = 'running', scan_job_id = ?, checkpoint_json = ?, updated_at = ?
+                     WHERE id = ? AND status = 'pending'",
+                )
+                .bind(&scan_job_id)
+                .bind(checkpoint.to_string())
+                .bind(&now)
+                .bind(&task_id)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| format!("failed to set task running in reconcile (task_id={}): {}", task_id, e))?;
+            }
+            continue;
+        }
+
+        let checkpoint = json!({
+            "scan_job_id": scan_job_id,
+            "scan_status": scan_status,
+            "processed_count": processed_count,
+            "total_count": total_count,
+        });
+
+        sqlx::query(
+            "UPDATE task_jobs
+             SET status = ?, progress_done = ?, progress_total = ?, error_message = ?,
+                 finished_at = COALESCE(?, finished_at), checkpoint_json = ?, updated_at = ?
+             WHERE id = ? AND status IN ('pending', 'running')",
+        )
+        .bind(&scan_status)
+        .bind(processed_count)
+        .bind(total_count)
+        .bind(error_message.as_deref())
+        .bind(finished_at.as_deref())
+        .bind(checkpoint.to_string())
+        .bind(&now)
+        .bind(&task_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| format!("failed to update task final state in reconcile (task_id={}): {}", task_id, e))?;
     }
 
     Ok(())
@@ -1591,22 +1670,22 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
         }
     };
 
-    let done_at = Utc::now().to_rfc3339();
-    let checkpoint = json!({"scan_job_id": scan_job_id});
+    let now_after_enqueue = Utc::now().to_rfc3339();
+    let checkpoint = json!({"scan_job_id": scan_job_id, "scan_status": "pending"});
     sqlx::query(
         "UPDATE task_jobs
-         SET status = 'success', scan_job_id = ?, checkpoint_json = ?, progress_done = 1, progress_total = 1,
-             finished_at = ?, updated_at = ?
+         SET status = 'running', scan_job_id = ?, checkpoint_json = ?,
+             progress_done = 0, progress_total = NULL,
+             finished_at = NULL, updated_at = ?
          WHERE id = ?",
     )
     .bind(&scan_job_id)
     .bind(checkpoint.to_string())
-    .bind(&done_at)
-    .bind(&done_at)
+    .bind(&now_after_enqueue)
     .bind(task_job_id)
     .execute(&state.pool)
     .await
-    .map_err(|e| format!("failed to mark task {} success: {}", task_job_id, e))?;
+    .map_err(|e| format!("failed to mark task {} running after enqueue: {}", task_job_id, e))?;
 
     Ok(scan_job_id)
 }
