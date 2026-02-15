@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path as StdPath;
+use std::sync::Arc;
 
 use axum::{extract::Path, extract::State, http::StatusCode, Json};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -12,7 +13,10 @@ use crate::api::types::{
     ApiResponse, CreateAlbumRequest, CreateSourceRequest, PagedData, PhotoSearchRequest,
     ScanTriggerResponse,
 };
-use crate::domain::album_rules::parse_album_from_dir_name;
+use crate::api::AppState;
+use crate::domain::album_rules::{
+    patterns_from_delimiters, parse_album_from_dir_name_with_patterns, DirectoryRulePattern,
+};
 use crate::domain::models::{build_album_id, build_photo_id, Album, Photo, Source};
 use crate::infra::storage::local_fs::LocalFsAdapter;
 use crate::infra::storage::StorageAdapter;
@@ -23,7 +27,7 @@ pub async fn health() -> Json<ApiResponse<Value>> {
 }
 
 pub async fn list_sources(
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<Source>>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!("list_sources requested");
     let rows = sqlx::query_as::<_, Source>(
@@ -31,7 +35,7 @@ pub async fn list_sources(
          FROM sources
          ORDER BY created_at DESC",
     )
-    .fetch_all(&pool)
+    .fetch_all(&state.pool)
     .await
     .map_err(|err| internal_db_error("list_sources.fetch_all", json!({}), err))?;
 
@@ -41,7 +45,7 @@ pub async fn list_sources(
 }
 
 pub async fn create_source(
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<CreateSourceRequest>,
 ) -> Result<Json<ApiResponse<Source>>, (StatusCode, Json<ApiResponse<Value>>)> {
     if req.name.trim().is_empty() || req.root_path.trim().is_empty() {
@@ -71,7 +75,7 @@ pub async fn create_source(
     .bind(&source_type)
     .bind(&now)
     .bind(&now)
-    .execute(&pool)
+    .execute(&state.pool)
     .await
     .map_err(|err| {
         internal_db_error(
@@ -101,7 +105,7 @@ pub async fn create_source(
 
 pub async fn trigger_source_scan(
     Path(source_id): Path<String>,
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<ScanTriggerResponse>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!(source_id, "trigger_source_scan requested");
 
@@ -111,7 +115,7 @@ pub async fn trigger_source_scan(
          WHERE id = ?",
     )
     .bind(&source_id)
-    .fetch_optional(&pool)
+    .fetch_optional(&state.pool)
     .await
     .map_err(|err| {
         internal_db_error(
@@ -135,7 +139,7 @@ pub async fn trigger_source_scan(
     )
     .bind(&job_id)
     .bind(&source.id)
-    .execute(&pool)
+    .execute(&state.pool)
     .await
     .map_err(|err| {
         internal_db_error(
@@ -147,10 +151,22 @@ pub async fn trigger_source_scan(
 
     info!(job_id, source_id = source.id, from = "none", to = "pending", "scan job status transition");
 
-    let pool_for_task = pool.clone();
+    let pool_for_task = state.pool.clone();
     let job_id_for_task = job_id.clone();
+    let album_rule_patterns = if state.config.album_rules.enabled {
+        patterns_from_delimiters(&state.config.album_rules.date_delimiters)
+    } else {
+        Vec::new()
+    };
     tokio::spawn(async move {
-        if let Err(e) = run_scan_job(pool_for_task, job_id_for_task.clone(), source).await {
+        if let Err(e) = run_scan_job(
+            pool_for_task,
+            job_id_for_task.clone(),
+            source,
+            album_rule_patterns,
+        )
+        .await
+        {
             error!(job_id = job_id_for_task, error = %e, "scan job execution failed at task level");
         }
     });
@@ -160,7 +176,7 @@ pub async fn trigger_source_scan(
 
 pub async fn get_scan_job(
     Path(job_id): Path<String>,
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!(job_id, "get_scan_job requested");
 
@@ -170,7 +186,7 @@ pub async fn get_scan_job(
          WHERE id = ?",
     )
     .bind(&job_id)
-    .fetch_optional(&pool)
+    .fetch_optional(&state.pool)
     .await
     .map_err(|err| internal_db_error("get_scan_job.fetch", json!({"job_id": job_id}), err))?
     .ok_or_else(|| bad_request("scan job 不存在"))?;
@@ -192,7 +208,7 @@ pub async fn get_scan_job(
 }
 
 pub async fn search_photos(
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<PhotoSearchRequest>,
 ) -> Result<Json<ApiResponse<PagedData<Photo>>>, (StatusCode, Json<ApiResponse<Value>>)> {
     let page = req.page.unwrap_or(1).max(1);
@@ -235,7 +251,7 @@ pub async fn search_photos(
 
     let total: i64 = if keyword.is_empty() {
         sqlx::query_scalar(count_sql)
-            .fetch_one(&pool)
+            .fetch_one(&state.pool)
             .await
             .map_err(|err| {
                 internal_db_error("search_photos.count", json!({"keyword": keyword.clone()}), err)
@@ -246,7 +262,7 @@ pub async fn search_photos(
             .bind(&like)
             .bind(&like)
             .bind(&like)
-            .fetch_one(&pool)
+            .fetch_one(&state.pool)
             .await
             .map_err(|err| {
                 internal_db_error("search_photos.count_like", json!({"like": like.clone()}), err)
@@ -257,7 +273,7 @@ pub async fn search_photos(
         sqlx::query_as(list_sql)
             .bind(page_size)
             .bind(offset)
-            .fetch_all(&pool)
+            .fetch_all(&state.pool)
             .await
             .map_err(|err| {
                 internal_db_error(
@@ -274,7 +290,7 @@ pub async fn search_photos(
             .bind(&like)
             .bind(page_size)
             .bind(offset)
-            .fetch_all(&pool)
+            .fetch_all(&state.pool)
             .await
             .map_err(|err| {
                 internal_db_error(
@@ -296,7 +312,7 @@ pub async fn search_photos(
 }
 
 pub async fn list_albums(
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<Album>>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!("list_albums requested");
     let rows = sqlx::query_as::<_, Album>(
@@ -305,7 +321,7 @@ pub async fn list_albums(
          ORDER BY created_at DESC
          LIMIT 200",
     )
-    .fetch_all(&pool)
+    .fetch_all(&state.pool)
     .await
     .map_err(|err| internal_db_error("list_albums.fetch_all", json!({}), err))?;
 
@@ -315,7 +331,7 @@ pub async fn list_albums(
 }
 
 pub async fn create_album(
-    State(pool): State<SqlitePool>,
+    State(state): State<Arc<AppState>>,
     Json(req): Json<CreateAlbumRequest>,
 ) -> Result<Json<ApiResponse<Album>>, (StatusCode, Json<ApiResponse<Value>>)> {
     if req.name.trim().is_empty() {
@@ -347,7 +363,7 @@ pub async fn create_album(
     .bind(req.rule_key.as_deref())
     .bind(&now)
     .bind(&now)
-    .execute(&pool)
+    .execute(&state.pool)
     .await
     .map_err(|err| {
         internal_db_error(
@@ -410,7 +426,12 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
     )
 }
 
-async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Result<(), String> {
+async fn run_scan_job(
+    pool: SqlitePool,
+    job_id: String,
+    source: Source,
+    album_rule_patterns: Vec<DirectoryRulePattern>,
+) -> Result<(), String> {
     let running_at = Utc::now().to_rfc3339();
     sqlx::query("UPDATE scan_jobs SET status = 'running', started_at = ? WHERE id = ?")
         .bind(&running_at)
@@ -660,6 +681,7 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                     &source.id,
                     &candidate.file_path,
                     &photo_id,
+                    &album_rule_patterns,
                     &mut album_cache,
                 )
                 .await
@@ -886,6 +908,7 @@ async fn ensure_album_by_dir_rule(
     source_id: &str,
     file_path: &str,
     photo_id: &str,
+    rule_patterns: &[DirectoryRulePattern],
     cache: &mut HashMap<String, String>,
 ) -> Result<bool, String> {
     let path = StdPath::new(file_path);
@@ -898,7 +921,7 @@ async fn ensure_album_by_dir_rule(
         None => return Ok(false),
     };
 
-    let matched = match parse_album_from_dir_name(&dir_name) {
+    let matched = match parse_album_from_dir_name_with_patterns(&dir_name, rule_patterns) {
         Some(v) => v,
         None => return Ok(false),
     };

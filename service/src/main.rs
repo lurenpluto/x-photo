@@ -17,8 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = loaded.config;
     let _log_guard = logging::init_logging("xphoto-service", &cfg.logging.dir, &cfg.logging.level)?;
 
-    let database_url = cfg.database.url;
-    let bind_addr = cfg.server.bind_addr;
+    let database_url = cfg.database.url.clone();
+    let bind_addr = cfg.server.bind_addr.clone();
     let cmd_args: Vec<String> = std::env::args().collect();
 
     info!(
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     info!("database schema initialization completed");
 
-    let app: Router = api::router(pool);
+    let app: Router = api::router(pool, cfg.clone());
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
 

@@ -1,10 +1,22 @@
+use std::sync::Arc;
+
 use axum::{routing::get, routing::post, Router};
 use sqlx::SqlitePool;
+
+use crate::config::AppConfig;
 
 mod handlers;
 mod types;
 
-pub fn router(pool: SqlitePool) -> Router {
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+    pub config: AppConfig,
+}
+
+pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
+    let state = Arc::new(AppState { pool, config });
+
     Router::new()
         .route("/rpc/v1/health", get(handlers::health))
         .route("/rpc/v1/sources", get(handlers::list_sources).post(handlers::create_source))
@@ -12,5 +24,5 @@ pub fn router(pool: SqlitePool) -> Router {
         .route("/rpc/v1/scan-jobs/{job_id}", get(handlers::get_scan_job))
         .route("/rpc/v1/photos/search", post(handlers::search_photos))
         .route("/rpc/v1/albums", get(handlers::list_albums).post(handlers::create_album))
-        .with_state(pool)
+        .with_state(state)
 }

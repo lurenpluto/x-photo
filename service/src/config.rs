@@ -3,32 +3,45 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
     pub storage: StorageConfig,
+    pub album_rules: AlbumRulesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ServerConfig {
     pub bind_addr: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DatabaseConfig {
     pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LoggingConfig {
     pub dir: String,
     pub level: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StorageConfig {
     pub allow_delete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlbumRulesConfig {
+    pub enabled: bool,
+    pub date_delimiters: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -47,6 +60,52 @@ impl Default for AppConfig {
             storage: StorageConfig {
                 allow_delete: false,
             },
+            album_rules: AlbumRulesConfig {
+                enabled: true,
+                date_delimiters: vec![".".to_string(), "_".to_string(), "-".to_string()],
+            },
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            bind_addr: "0.0.0.0:8080".to_string(),
+        }
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: "sqlite://xphoto.db".to_string(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            dir: "logs".to_string(),
+            level: "info".to_string(),
+        }
+    }
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            allow_delete: false,
+        }
+    }
+}
+
+impl Default for AlbumRulesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            date_delimiters: vec![".".to_string(), "_".to_string(), "-".to_string()],
         }
     }
 }

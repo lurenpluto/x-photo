@@ -10,3 +10,7 @@ level = "info"
 
 [storage]
 allow_delete = false
+
+[album_rules]
+enabled = true
+date_delimiters = [".", "_", "-"]

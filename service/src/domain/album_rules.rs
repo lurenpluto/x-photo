@@ -7,53 +7,52 @@ pub struct AlbumRuleMatch {
     pub album_name: String,
 }
 
-pub trait AlbumRule {
-    fn key(&self) -> &'static str;
-    fn parse(&self, dir_name: &str) -> Option<AlbumRuleMatch>;
-}
-
-pub struct DotDateRule;
-pub struct UnderscoreDateRule;
-pub struct HyphenDateRule;
-
-impl AlbumRule for DotDateRule {
-    fn key(&self) -> &'static str {
-        "date_dot"
-    }
-
-    fn parse(&self, dir_name: &str) -> Option<AlbumRuleMatch> {
-        parse_by_delimiter(self.key(), dir_name, '.')
-    }
-}
-
-impl AlbumRule for UnderscoreDateRule {
-    fn key(&self) -> &'static str {
-        "date_underscore"
-    }
-
-    fn parse(&self, dir_name: &str) -> Option<AlbumRuleMatch> {
-        parse_by_delimiter(self.key(), dir_name, '_')
-    }
-}
-
-impl AlbumRule for HyphenDateRule {
-    fn key(&self) -> &'static str {
-        "date_hyphen"
-    }
-
-    fn parse(&self, dir_name: &str) -> Option<AlbumRuleMatch> {
-        parse_by_delimiter(self.key(), dir_name, '-')
-    }
+#[derive(Debug, Clone)]
+pub struct DirectoryRulePattern {
+    pub key: String,
+    pub delimiter: char,
 }
 
 pub fn parse_album_from_dir_name(dir_name: &str) -> Option<AlbumRuleMatch> {
-    let rules: [&dyn AlbumRule; 3] = [&DotDateRule, &UnderscoreDateRule, &HyphenDateRule];
-    for rule in rules {
-        if let Some(matched) = rule.parse(dir_name) {
+    let defaults = vec![".".to_string(), "_".to_string(), "-".to_string()];
+    let patterns = patterns_from_delimiters(&defaults);
+    parse_album_from_dir_name_with_patterns(dir_name, &patterns)
+}
+
+pub fn parse_album_from_dir_name_with_patterns(
+    dir_name: &str,
+    patterns: &[DirectoryRulePattern],
+) -> Option<AlbumRuleMatch> {
+    for pattern in patterns {
+        if let Some(matched) = parse_by_delimiter(&pattern.key, dir_name, pattern.delimiter) {
             return Some(matched);
         }
     }
     None
+}
+
+pub fn patterns_from_delimiters(delimiters: &[String]) -> Vec<DirectoryRulePattern> {
+    let mut out = Vec::new();
+    for delimiter in delimiters {
+        let mut chars = delimiter.chars();
+        let first = match chars.next() {
+            Some(c) if chars.next().is_none() => c,
+            _ => continue,
+        };
+
+        let key = match first {
+            '.' => "date_dot".to_string(),
+            '_' => "date_underscore".to_string(),
+            '-' => "date_hyphen".to_string(),
+            other => format!("date_delim_{}", other as u32),
+        };
+
+        out.push(DirectoryRulePattern {
+            key,
+            delimiter: first,
+        });
+    }
+    out
 }
 
 fn parse_by_delimiter(rule_name: &str, dir_name: &str, delim: char) -> Option<AlbumRuleMatch> {
