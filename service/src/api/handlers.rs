@@ -24,6 +24,10 @@ use crate::domain::album_rules::{
     RegexRulePattern,
 };
 use crate::domain::models::{build_album_id, build_photo_id, Album, Photo, Source};
+use crate::domain::task_consts::{
+    STATUS_CANCELLED, STATUS_FAILED, STATUS_PENDING, STATUS_RUNNING, TRIGGER_FS_WATCH,
+    TRIGGER_MANUAL, TRIGGER_RETRY, TRIGGER_SYSTEM,
+};
 use crate::infra::storage::local_fs::LocalFsAdapter;
 use crate::infra::storage::StorageAdapter;
 
@@ -157,7 +161,7 @@ pub async fn trigger_source_scan(
     let task_job_id = create_scan_task_job(
         state.clone(),
         &source.id,
-        "manual",
+        TRIGGER_MANUAL,
         json!({"source_id": source.id}),
     )
     .await
@@ -247,7 +251,7 @@ pub async fn trigger_source_scan_fs_watch(
         "source_id": source.id,
         "changed_paths": req.changed_paths,
     });
-    let task_job_id = create_scan_task_job(state.clone(), &source.id, "fs_watch", payload)
+    let task_job_id = create_scan_task_job(state.clone(), &source.id, TRIGGER_FS_WATCH, payload)
         .await
         .map_err(|msg| {
             (
@@ -330,7 +334,7 @@ pub async fn cancel_scan_job(
     let status: String = row.get("status");
     let now = Utc::now().to_rfc3339();
 
-    if status == "pending" {
+    if status == STATUS_PENDING {
         let result = sqlx::query(
             "UPDATE scan_jobs
              SET status = 'cancelled', cancel_requested = 1, finished_at = ?, error_message = ?
@@ -352,7 +356,7 @@ pub async fn cancel_scan_job(
         upsert_source_scan_state(
             &state.pool,
             &source_id,
-            "cancelled",
+            STATUS_CANCELLED,
             None,
             Some(&now),
             None,
@@ -378,7 +382,7 @@ pub async fn cancel_scan_job(
         })));
     }
 
-    if status == "running" {
+    if status == STATUS_RUNNING {
         let result = sqlx::query("UPDATE scan_jobs SET cancel_requested = 1 WHERE id = ?")
             .bind(&job_id)
             .execute(&state.pool)
@@ -413,7 +417,7 @@ pub async fn retry_scan_job(
 
     let source_id: String = row.get("source_id");
     let status: String = row.get("status");
-    if status != "failed" && status != "cancelled" {
+    if status != STATUS_FAILED && status != STATUS_CANCELLED {
         return Err(bad_request("仅支持对 failed/cancelled 任务重试"));
     }
 
@@ -442,7 +446,7 @@ pub async fn retry_scan_job(
     let task_job_id = create_scan_task_job(
         state.clone(),
         &source.id,
-        "retry",
+        TRIGGER_RETRY,
         json!({"source_id": source.id, "retry_from_job_id": job_id}),
     )
     .await
@@ -640,7 +644,7 @@ pub async fn cancel_task_job(
         .ok_or_else(|| bad_request("task job 不存在"))?;
 
     let task_status: String = task_row.get("status");
-    if task_status != "pending" && task_status != "running" {
+    if task_status != STATUS_PENDING && task_status != STATUS_RUNNING {
         return Ok(Json(ApiResponse::ok(BatchOperationResult { affected: 0 })));
     }
 
@@ -663,7 +667,7 @@ pub async fn cancel_task_job(
             let scan_status: String = scan_row.get("status");
             let now = Utc::now().to_rfc3339();
 
-            if scan_status == "pending" {
+            if scan_status == STATUS_PENDING {
                 sqlx::query(
                     "UPDATE scan_jobs
                      SET status = 'cancelled', cancel_requested = 1, finished_at = ?, error_message = ?
@@ -685,7 +689,7 @@ pub async fn cancel_task_job(
                 upsert_source_scan_state(
                     &state.pool,
                     &source_id,
-                    "cancelled",
+                    STATUS_CANCELLED,
                     None,
                     Some(&now),
                     None,
@@ -705,7 +709,7 @@ pub async fn cancel_task_job(
                         }),
                     )
                 })?;
-            } else if scan_status == "running" {
+            } else if scan_status == STATUS_RUNNING {
                 sqlx::query("UPDATE scan_jobs SET cancel_requested = 1 WHERE id = ?")
                     .bind(&scan_job_id)
                     .execute(&state.pool)
@@ -755,7 +759,7 @@ pub async fn retry_task_job(
     let retry_count: i64 = row.get("retry_count");
     let max_retries: i64 = row.get("max_retries");
 
-    if status != "failed" && status != "cancelled" {
+    if status != STATUS_FAILED && status != STATUS_CANCELLED {
         return Err(bad_request("仅 failed/cancelled 任务支持重试"));
     }
     if retry_count >= max_retries {
@@ -1007,7 +1011,7 @@ async fn fetch_task_health(
             })
             .unwrap_or(false);
 
-        let healthy = status == "running" && heartbeat_healthy;
+        let healthy = status == STATUS_RUNNING && heartbeat_healthy;
         if !healthy {
             all_healthy = false;
         }
@@ -1054,7 +1058,7 @@ fn task_job_from_row(row: sqlx::sqlite::SqliteRow) -> TaskJobData {
         progress_done,
         progress_total,
         progress_percent,
-        is_active: status == "pending" || status == "running",
+        is_active: status == STATUS_PENDING || status == STATUS_RUNNING,
         retry_count: row.get("retry_count"),
         max_retries: row.get("max_retries"),
         error_message: row.get("error_message"),
@@ -1619,7 +1623,7 @@ async fn ensure_daemon_task_row(
             started_at, finished_at,
             created_at, updated_at
          ) VALUES (
-            ?, ?, 'system', 'running',
+            ?, ?, ?, 'running',
             1, ?,
             NULL,
             NULL, NULL,
@@ -1637,6 +1641,7 @@ async fn ensure_daemon_task_row(
     )
     .bind(daemon_id)
     .bind(daemon_type)
+    .bind(TRIGGER_SYSTEM)
     .bind(&now)
     .bind(&now)
     .bind(&now)
@@ -1708,7 +1713,7 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
         let finished_at: Option<String> = row.get("finished_at");
 
         let now = Utc::now().to_rfc3339();
-        if scan_status == "pending" || scan_status == "running" {
+        if scan_status == STATUS_PENDING || scan_status == STATUS_RUNNING {
             let checkpoint = json!({
                 "scan_job_id": scan_job_id,
                 "scan_status": scan_status,
@@ -1820,7 +1825,7 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
     .ok_or_else(|| format!("scan task job not found: {}", task_job_id))?;
 
     let status: String = task_row.get("status");
-    if status != "pending" {
+    if status != STATUS_PENDING {
         let existing_scan_job_id: Option<String> = task_row.get("scan_job_id");
         if let Some(scan_job_id) = existing_scan_job_id {
             return Ok(scan_job_id);
@@ -1904,7 +1909,7 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
     };
 
     let now_after_enqueue = Utc::now().to_rfc3339();
-    let checkpoint = json!({"scan_job_id": scan_job_id, "scan_status": "pending"});
+    let checkpoint = json!({"scan_job_id": scan_job_id, "scan_status": STATUS_PENDING});
     sqlx::query(
         "UPDATE task_jobs
          SET status = 'running', scan_job_id = ?, checkpoint_json = ?,
@@ -2034,7 +2039,7 @@ async fn run_scan_job(
         .fetch_optional(&pool)
         .await
         .map_err(|e| format!("failed to read scan job status before run (job_id={}): {}", job_id, e))?;
-    if current_status.as_deref() == Some("cancelled") {
+    if current_status.as_deref() == Some(STATUS_CANCELLED) {
         info!(job_id, "scan job already cancelled before start");
         return Ok(());
     }

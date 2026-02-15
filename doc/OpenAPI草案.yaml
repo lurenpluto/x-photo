@@ -1,0 +1,136 @@
+openapi: 3.0.3
+info:
+  title: XPhoto RPC API Draft
+  version: 0.1.0
+servers:
+  - url: /rpc/v1
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      responses:
+        '200':
+          description: ok
+  /sources:
+    get:
+      summary: 数据源列表
+      responses:
+        '200': { description: ok }
+    post:
+      summary: 创建数据源
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, root_path]
+              properties:
+                name: { type: string }
+                root_path: { type: string }
+                source_type: { type: string }
+      responses:
+        '200': { description: ok }
+  /sources/{source_id}/scan:
+    post:
+      summary: 手动触发扫描
+      parameters:
+        - in: path
+          name: source_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ok }
+  /sources/{source_id}/scan:fs-watch:
+    post:
+      summary: 文件变更触发扫描
+      parameters:
+        - in: path
+          name: source_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [changed_paths]
+              properties:
+                changed_paths:
+                  type: array
+                  items: { type: string }
+      responses:
+        '200': { description: ok }
+  /scan-jobs/{job_id}:
+    get:
+      summary: 扫描任务详情
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ok }
+  /scan-jobs/{job_id}/cancel:
+    post:
+      summary: 取消扫描任务
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ok }
+  /scan-jobs/{job_id}/retry:
+    post:
+      summary: 重试扫描任务
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ok }
+  /task-jobs/overview:
+    get:
+      summary: 任务总览(active+health)
+      parameters:
+        - in: query
+          name: include_all_daemon
+          schema: { type: boolean }
+        - in: query
+          name: stale_after_seconds
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: ok }
+  /photos/search:
+    post:
+      summary: 照片检索
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200': { description: ok }
+  /photos/{photo_id}:
+    get:
+      summary: 照片详情
+      parameters:
+        - in: path
+          name: photo_id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: ok }
+  /albums:
+    get:
+      summary: 相册列表
+      responses:
+        '200': { description: ok }
+    post:
+      summary: 创建相册
+      responses:
+        '200': { description: ok }
