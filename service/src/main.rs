@@ -31,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         scan_max_concurrent_jobs = cfg.scan.max_concurrent_jobs,
         scan_checkpoint_every = cfg.scan.checkpoint_every,
         scan_resume_enabled = cfg.scan.resume_enabled,
+        scan_task_dispatch_interval_ms = cfg.scan.task_dispatch_interval_ms,
+        scan_task_stale_seconds = cfg.scan.task_stale_seconds,
         args = ?cmd_args,
         "bootstrapping service with runtime inputs"
     );

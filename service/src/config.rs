@@ -45,6 +45,7 @@ pub struct ScanConfig {
     pub checkpoint_every: usize,
     pub resume_enabled: bool,
     pub task_dispatch_interval_ms: u64,
+    pub task_stale_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +87,7 @@ impl Default for AppConfig {
                 checkpoint_every: 50,
                 resume_enabled: true,
                 task_dispatch_interval_ms: 2000,
+                task_stale_seconds: 120,
             },
             album_rules: AlbumRulesConfig {
                 enabled: true,
@@ -148,6 +150,7 @@ impl Default for ScanConfig {
             checkpoint_every: 50,
             resume_enabled: true,
             task_dispatch_interval_ms: 2000,
+            task_stale_seconds: 120,
         }
     }
 }
@@ -196,6 +199,31 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     }
     if let Ok(log_level) = std::env::var("LOG_LEVEL") {
         config.logging.level = log_level;
+    }
+    if let Ok(v) = std::env::var("SCAN_MAX_CONCURRENT_JOBS") {
+        if let Ok(n) = v.parse::<usize>() {
+            config.scan.max_concurrent_jobs = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_CHECKPOINT_EVERY") {
+        if let Ok(n) = v.parse::<usize>() {
+            config.scan.checkpoint_every = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_RESUME_ENABLED") {
+        if let Ok(b) = v.parse::<bool>() {
+            config.scan.resume_enabled = b;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_TASK_DISPATCH_INTERVAL_MS") {
+        if let Ok(n) = v.parse::<u64>() {
+            config.scan.task_dispatch_interval_ms = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_TASK_STALE_SECONDS") {
+        if let Ok(n) = v.parse::<i64>() {
+            config.scan.task_stale_seconds = n;
+        }
     }
 
     Ok(LoadedConfig {

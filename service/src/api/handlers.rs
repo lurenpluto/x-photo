@@ -1691,12 +1691,13 @@ async fn dispatch_one_pending_scan_task(state: Arc<AppState>) -> Result<(), Stri
 async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String> {
     let rows = sqlx::query(
         "SELECT tj.id AS task_id, tj.status AS task_status, tj.scan_job_id,
+                tj.updated_at AS task_updated_at,
                 sj.status AS scan_status, sj.processed_count, sj.total_count,
                 sj.error_message, sj.finished_at
          FROM task_jobs tj
-         INNER JOIN scan_jobs sj ON sj.id = tj.scan_job_id
+         LEFT JOIN scan_jobs sj ON sj.id = tj.scan_job_id
          WHERE tj.job_type = 'scan'
-           AND tj.status IN ('pending', 'running')",
+            AND tj.status IN ('pending', 'running')",
     )
     .fetch_all(&state.pool)
     .await
@@ -1705,14 +1706,72 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
     for row in rows {
         let task_id: String = row.get("task_id");
         let task_status: String = row.get("task_status");
-        let scan_job_id: String = row.get("scan_job_id");
-        let scan_status: String = row.get("scan_status");
-        let processed_count: i64 = row.get("processed_count");
+        let scan_job_id: Option<String> = row.get("scan_job_id");
+        let task_updated_at: String = row.get("task_updated_at");
+        let scan_status: Option<String> = row.get("scan_status");
+        let processed_count: Option<i64> = row.get("processed_count");
         let total_count: Option<i64> = row.get("total_count");
         let error_message: Option<String> = row.get("error_message");
         let finished_at: Option<String> = row.get("finished_at");
 
         let now = Utc::now().to_rfc3339();
+
+        if scan_job_id.is_none() {
+            if task_status == STATUS_RUNNING {
+                let stale_seconds = state.config.scan.task_stale_seconds.max(1);
+                let is_stale = DateTime::parse_from_rfc3339(&task_updated_at)
+                    .ok()
+                    .map(|dt| {
+                        let dt_utc = dt.with_timezone(&Utc);
+                        (Utc::now() - dt_utc).num_seconds() > stale_seconds
+                    })
+                    .unwrap_or(false);
+
+                if is_stale {
+                    sqlx::query(
+                        "UPDATE task_jobs
+                         SET status = ?, error_message = ?, finished_at = ?, updated_at = ?
+                         WHERE id = ? AND status = ?",
+                    )
+                    .bind(STATUS_FAILED)
+                    .bind("stale running task without scan_job_id")
+                    .bind(&now)
+                    .bind(&now)
+                    .bind(&task_id)
+                    .bind(STATUS_RUNNING)
+                    .execute(&state.pool)
+                    .await
+                    .map_err(|e| format!("failed to fail stale task without scan link (task_id={}): {}", task_id, e))?;
+                }
+            }
+            continue;
+        }
+
+        let scan_job_id = scan_job_id.unwrap_or_default();
+        let scan_status = match scan_status {
+            Some(v) => v,
+            None => {
+                sqlx::query(
+                    "UPDATE task_jobs
+                     SET status = ?, error_message = ?, finished_at = ?, updated_at = ?
+                     WHERE id = ? AND status IN (?, ?)",
+                )
+                .bind(STATUS_FAILED)
+                .bind("linked scan_job not found")
+                .bind(&now)
+                .bind(&now)
+                .bind(&task_id)
+                .bind(STATUS_PENDING)
+                .bind(STATUS_RUNNING)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| format!("failed to fail task with missing scan row (task_id={}): {}", task_id, e))?;
+                continue;
+            }
+        };
+
+        let processed_count = processed_count.unwrap_or(0);
+
         if scan_status == STATUS_PENDING || scan_status == STATUS_RUNNING {
             let checkpoint = json!({
                 "scan_job_id": scan_job_id,

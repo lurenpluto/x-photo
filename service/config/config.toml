@@ -16,6 +16,7 @@ max_concurrent_jobs = 2
 checkpoint_every = 50
 resume_enabled = true
 task_dispatch_interval_ms = 2000
+task_stale_seconds = 120
 
 [album_rules]
 enabled = true
