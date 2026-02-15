@@ -27,6 +27,7 @@ impl LocalFsAdapter {
             path,
             is_dir: metadata.is_dir(),
             size: metadata.len(),
+            created_at: metadata.created().ok(),
             modified_at: metadata.modified().ok(),
         }
     }

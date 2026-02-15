@@ -1,7 +1,7 @@
 use std::path::Path as StdPath;
 
 use axum::{extract::Path, extract::State, http::StatusCode, Json};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
@@ -494,11 +494,26 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                 }
             };
 
+            let (shot_at, exif_json) = match parse_exif_for_scan(&file_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(file_path = file_path, error = %e, "failed to parse exif, fallback to fs time");
+                    (None, None)
+                }
+            };
+
+            let created_at_fs = entry
+                .created_at
+                .map(|t| DateTime::<Utc>::from(t).to_rfc3339());
+
             let modified_at_fs = entry
                 .modified_at
                 .map(|t| DateTime::<Utc>::from(t).to_rfc3339());
-            let sort_time = modified_at_fs
+
+            let sort_time = shot_at
                 .clone()
+                .or_else(|| created_at_fs.clone())
+                .or_else(|| modified_at_fs.clone())
                 .unwrap_or_else(|| Utc::now().to_rfc3339());
 
             candidates.push(ScannedPhotoCandidate {
@@ -509,9 +524,11 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                 file_size: std::cmp::min(entry.size, i64::MAX as u64) as i64,
                 mime_type: mime_from_ext(file_ext.as_deref()),
                 content_hash,
-                created_at_fs: None,
+                shot_at,
+                created_at_fs,
                 modified_at_fs,
                 sort_time,
+                exif_json,
             });
         }
 
@@ -584,8 +601,8 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                         exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
                      ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, NULL, ?, ?, ?, NULL, NULL,
-                        NULL, NULL, NULL, NULL, NULL, ?, ?
+                        ?, ?, ?, ?, ?, NULL, NULL,
+                        ?, NULL, NULL, NULL, NULL, ?, ?
                      )
                      ON CONFLICT(source_id, storage_file_id) DO UPDATE SET
                         file_path = excluded.file_path,
@@ -594,9 +611,11 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                         file_size = excluded.file_size,
                         mime_type = excluded.mime_type,
                         content_hash = excluded.content_hash,
+                        shot_at = excluded.shot_at,
                         created_at_fs = excluded.created_at_fs,
                         modified_at_fs = excluded.modified_at_fs,
                         sort_time = excluded.sort_time,
+                        exif_json = excluded.exif_json,
                         deleted_at = NULL,
                         updated_at = excluded.updated_at",
                 )
@@ -609,9 +628,11 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                 .bind(candidate.file_size)
                 .bind(candidate.mime_type.as_deref())
                 .bind(&candidate.content_hash)
+                .bind(candidate.shot_at.as_deref())
                 .bind(candidate.created_at_fs.as_deref())
                 .bind(candidate.modified_at_fs.as_deref())
                 .bind(&candidate.sort_time)
+                .bind(candidate.exif_json.as_deref())
                 .bind(&now)
                 .bind(&now)
                 .execute(&pool)
@@ -742,9 +763,11 @@ struct ScannedPhotoCandidate {
     file_size: i64,
     mime_type: Option<String>,
     content_hash: String,
+    shot_at: Option<String>,
     created_at_fs: Option<String>,
     modified_at_fs: Option<String>,
     sort_time: String,
+    exif_json: Option<String>,
 }
 
 fn is_photo_path(path: &StdPath) -> bool {
@@ -780,6 +803,50 @@ fn mime_from_ext(ext: Option<&str>) -> Option<String> {
         Some("tiff") | Some("tif") => Some("image/tiff".to_string()),
         _ => None,
     }
+}
+
+fn parse_exif_for_scan(file_path: &str) -> Result<(Option<String>, Option<String>), String> {
+    let file = std::fs::File::open(file_path).map_err(|e| {
+        format!("failed to open file for exif parse at {}: {}", file_path, e)
+    })?;
+    let mut reader = std::io::BufReader::new(file);
+
+    let exif = match exif::Reader::new().read_from_container(&mut reader) {
+        Ok(v) => v,
+        Err(_) => return Ok((None, None)),
+    };
+
+    let mut exif_map = serde_json::Map::new();
+    let mut shot_at: Option<String> = None;
+
+    for field in exif.fields() {
+        let key = format!("{:?}", field.tag);
+        let value = field.display_value().with_unit(&exif).to_string();
+        exif_map.insert(key, serde_json::Value::String(value));
+    }
+
+    let shot_raw = exif
+        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
+        .or_else(|| exif.get_field(exif::Tag::DateTime, exif::In::PRIMARY))
+        .map(|f| f.display_value().with_unit(&exif).to_string());
+
+    if let Some(raw) = shot_raw {
+        shot_at = parse_exif_datetime_to_rfc3339(&raw);
+    }
+
+    let exif_json = if exif_map.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(exif_map).to_string())
+    };
+
+    Ok((shot_at, exif_json))
+}
+
+fn parse_exif_datetime_to_rfc3339(value: &str) -> Option<String> {
+    let normalized = value.trim();
+    let parsed = NaiveDateTime::parse_from_str(normalized, "%Y:%m:%d %H:%M:%S").ok()?;
+    Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc).to_rfc3339())
 }
 
 #[allow(clippy::too_many_arguments)]
