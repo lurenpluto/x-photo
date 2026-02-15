@@ -1535,6 +1535,7 @@ dependencies = [
  "hex",
  "image",
  "kamadak-exif",
+ "rand",
  "regex",
  "serde",
  "serde_json",
