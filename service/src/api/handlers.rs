@@ -424,6 +424,20 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
             msg
         })?;
 
+    upsert_source_scan_state(
+        &pool,
+        &source.id,
+        "running",
+        Some(&running_at),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await?;
+
     info!(job_id, source_id = source.id, from = "pending", to = "running", "scan job status transition");
 
     let source_root = source.root_path.clone();
@@ -518,12 +532,22 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
         Ok(result) => {
             let mut new_count: i64 = 0;
             let mut updated_count: i64 = 0;
+            let mut skipped_count: i64 = 0;
             let mut failed_count: i64 = result.failed_count;
             let now = Utc::now().to_rfc3339();
+            let mut last_scanned_path: Option<String> = None;
+            let mut last_scanned_storage_file_id: Option<String> = None;
+            let mut last_scanned_modified_at: Option<String> = None;
+            let mut last_scanned_content_hash: Option<String> = None;
 
             for candidate in &result.candidates {
-                let existing: Option<String> = sqlx::query_scalar(
-                    "SELECT id FROM photos WHERE source_id = ? AND storage_file_id = ?",
+                last_scanned_path = Some(candidate.file_path.clone());
+                last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
+                last_scanned_modified_at = candidate.modified_at_fs.clone();
+                last_scanned_content_hash = Some(candidate.content_hash.clone());
+
+                let existing = sqlx::query(
+                    "SELECT id, modified_at_fs, content_hash FROM photos WHERE source_id = ? AND storage_file_id = ?",
                 )
                 .bind(&source.id)
                 .bind(&candidate.storage_file_id)
@@ -538,7 +562,15 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                     msg
                 })?;
 
-                if existing.is_some() {
+                if let Some(row) = existing {
+                    let existing_modified_at: Option<String> = row.get("modified_at_fs");
+                    let existing_content_hash: Option<String> = row.get("content_hash");
+                    if existing_modified_at == candidate.modified_at_fs
+                        && existing_content_hash.as_deref() == Some(candidate.content_hash.as_str())
+                    {
+                        skipped_count += 1;
+                        continue;
+                    }
                     updated_count += 1;
                 } else {
                     new_count += 1;
@@ -600,6 +632,21 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
 
             let total_count = (result.candidates.len() as i64) + result.failed_count;
             let finished_at = Utc::now().to_rfc3339();
+
+            upsert_source_scan_state(
+                &pool,
+                &source.id,
+                "success",
+                Some(&running_at),
+                Some(&finished_at),
+                last_scanned_path.as_deref(),
+                last_scanned_storage_file_id.as_deref(),
+                last_scanned_modified_at.as_deref(),
+                last_scanned_content_hash.as_deref(),
+                result.first_error.as_deref(),
+            )
+            .await?;
+
             sqlx::query(
                 "UPDATE scan_jobs
                  SET status = 'success', finished_at = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
@@ -631,6 +678,7 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                 total_count,
                 new_count,
                 updated_count,
+                skipped_count,
                 failed_count,
                 "scan job status transition"
             );
@@ -638,6 +686,21 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
         }
         Err(scan_error) => {
             let finished_at = Utc::now().to_rfc3339();
+
+            upsert_source_scan_state(
+                &pool,
+                &source.id,
+                "failed",
+                Some(&running_at),
+                Some(&finished_at),
+                None,
+                None,
+                None,
+                None,
+                Some(&scan_error),
+            )
+            .await?;
+
             sqlx::query(
                 "UPDATE scan_jobs
                  SET status = 'failed', finished_at = ?, failed_count = 1, error_message = ?
@@ -717,4 +780,59 @@ fn mime_from_ext(ext: Option<&str>) -> Option<String> {
         Some("tiff") | Some("tif") => Some("image/tiff".to_string()),
         _ => None,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_source_scan_state(
+    pool: &SqlitePool,
+    source_id: &str,
+    status: &str,
+    last_scan_started_at: Option<&str>,
+    last_scan_finished_at: Option<&str>,
+    last_scanned_path: Option<&str>,
+    last_scanned_storage_file_id: Option<&str>,
+    last_scanned_modified_at: Option<&str>,
+    last_scanned_content_hash: Option<&str>,
+    last_error_message: Option<&str>,
+) -> Result<(), String> {
+    let updated_at = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO source_scan_states (
+            source_id, status, last_scan_started_at, last_scan_finished_at,
+            last_scanned_path, last_scanned_storage_file_id, last_scanned_modified_at,
+            last_scanned_content_hash, last_error_message, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source_id) DO UPDATE SET
+            status = excluded.status,
+            last_scan_started_at = excluded.last_scan_started_at,
+            last_scan_finished_at = excluded.last_scan_finished_at,
+            last_scanned_path = excluded.last_scanned_path,
+            last_scanned_storage_file_id = excluded.last_scanned_storage_file_id,
+            last_scanned_modified_at = excluded.last_scanned_modified_at,
+            last_scanned_content_hash = excluded.last_scanned_content_hash,
+            last_error_message = excluded.last_error_message,
+            updated_at = excluded.updated_at",
+    )
+    .bind(source_id)
+    .bind(status)
+    .bind(last_scan_started_at)
+    .bind(last_scan_finished_at)
+    .bind(last_scanned_path)
+    .bind(last_scanned_storage_file_id)
+    .bind(last_scanned_modified_at)
+    .bind(last_scanned_content_hash)
+    .bind(last_error_message)
+    .bind(&updated_at)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        let msg = format!(
+            "failed to upsert source_scan_states (source_id={}, status={}): {}",
+            source_id, status, e
+        );
+        error!("{}", msg);
+        msg
+    })?;
+
+    Ok(())
 }

@@ -75,6 +75,20 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   FOREIGN KEY (source_id) REFERENCES sources (id)
 );
 
+CREATE TABLE IF NOT EXISTS source_scan_states (
+  source_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'success', 'failed')),
+  last_scan_started_at TEXT,
+  last_scan_finished_at TEXT,
+  last_scanned_path TEXT,
+  last_scanned_storage_file_id TEXT,
+  last_scanned_modified_at TEXT,
+  last_scanned_content_hash TEXT,
+  last_error_message TEXT,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (source_id) REFERENCES sources (id)
+);
+
 CREATE TABLE IF NOT EXISTS photo_features (
   photo_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -89,3 +103,4 @@ CREATE INDEX IF NOT EXISTS idx_photos_file_name ON photos (file_name);
 CREATE INDEX IF NOT EXISTS idx_photos_source_path ON photos (source_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_photo_albums_album ON photo_albums (album_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_source_scan_states_status ON source_scan_states (status, updated_at DESC);
