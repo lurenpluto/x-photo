@@ -1,14 +1,17 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::Path, extract::State, http::StatusCode, Json};
 use chrono::Utc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use tracing::{error, info, warn};
 
 use crate::api::types::{
     ApiResponse, CreateAlbumRequest, CreateSourceRequest, PagedData, PhotoSearchRequest,
+    ScanTriggerResponse,
 };
 use crate::domain::models::{build_album_id, Album, Photo, Source};
+use crate::infra::storage::local_fs::LocalFsAdapter;
+use crate::infra::storage::StorageAdapter;
 
 pub async fn health() -> Json<ApiResponse<Value>> {
     info!("health check requested");
@@ -90,6 +93,98 @@ pub async fn create_source(
     info!(source_id = item.id, "create_source completed");
 
     Ok(Json(ApiResponse::ok(item)))
+}
+
+pub async fn trigger_source_scan(
+    Path(source_id): Path<String>,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<ApiResponse<ScanTriggerResponse>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(source_id, "trigger_source_scan requested");
+
+    let source = sqlx::query_as::<_, Source>(
+        "SELECT id, name, root_path, source_type, enabled, created_at, updated_at
+         FROM sources
+         WHERE id = ?",
+    )
+    .bind(&source_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "trigger_source_scan.find_source",
+            json!({"source_id": source_id}),
+            err,
+        )
+    })?
+    .ok_or_else(|| bad_request("source 不存在"))?;
+
+    if !source.enabled {
+        return Err(bad_request("source 已禁用，无法扫描"));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let job_id = sha256_hex(&format!("{}:{}", source.id, now));
+
+    sqlx::query(
+        "INSERT INTO scan_jobs (id, source_id, status, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message)
+         VALUES (?, ?, 'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+    )
+    .bind(&job_id)
+    .bind(&source.id)
+    .execute(&pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "trigger_source_scan.insert_job",
+            json!({"job_id": job_id, "source_id": source.id}),
+            err,
+        )
+    })?;
+
+    info!(job_id, source_id = source.id, from = "none", to = "pending", "scan job status transition");
+
+    let pool_for_task = pool.clone();
+    let job_id_for_task = job_id.clone();
+    tokio::spawn(async move {
+        if let Err(e) = run_scan_job(pool_for_task, job_id_for_task.clone(), source).await {
+            error!(job_id = job_id_for_task, error = %e, "scan job execution failed at task level");
+        }
+    });
+
+    Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id })))
+}
+
+pub async fn get_scan_job(
+    Path(job_id): Path<String>,
+    State(pool): State<SqlitePool>,
+) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(job_id, "get_scan_job requested");
+
+    let row = sqlx::query(
+        "SELECT id, source_id, status, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message
+         FROM scan_jobs
+         WHERE id = ?",
+    )
+    .bind(&job_id)
+    .fetch_optional(&pool)
+    .await
+    .map_err(|err| internal_db_error("get_scan_job.fetch", json!({"job_id": job_id}), err))?
+    .ok_or_else(|| bad_request("scan job 不存在"))?;
+
+    let data = json!({
+        "id": row.get::<String, _>("id"),
+        "source_id": row.get::<String, _>("source_id"),
+        "status": row.get::<String, _>("status"),
+        "started_at": row.get::<Option<String>, _>("started_at"),
+        "finished_at": row.get::<Option<String>, _>("finished_at"),
+        "total_count": row.get::<Option<i64>, _>("total_count"),
+        "new_count": row.get::<Option<i64>, _>("new_count"),
+        "updated_count": row.get::<Option<i64>, _>("updated_count"),
+        "failed_count": row.get::<Option<i64>, _>("failed_count"),
+        "error_message": row.get::<Option<String>, _>("error_message"),
+    });
+
+    Ok(Json(ApiResponse::ok(data)))
 }
 
 pub async fn search_photos(
@@ -309,4 +404,88 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
             data: json!({}),
         }),
     )
+}
+
+async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Result<(), String> {
+    let running_at = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE scan_jobs SET status = 'running', started_at = ? WHERE id = ?")
+        .bind(&running_at)
+        .bind(&job_id)
+        .execute(&pool)
+        .await
+        .map_err(|e| {
+            let msg = format!(
+                "failed to switch scan job {} status pending->running for source {}: {}",
+                job_id, source.id, e
+            );
+            error!("{}", msg);
+            msg
+        })?;
+
+    info!(job_id, source_id = source.id, from = "pending", to = "running", "scan job status transition");
+
+    let source_root = source.root_path.clone();
+    let scan_result = tokio::task::spawn_blocking(move || {
+        let adapter = LocalFsAdapter::new(false);
+        let entries = adapter.list_entries(&source_root).map_err(|e| e.to_string())?;
+        let file_count = entries.iter().filter(|e| !e.is_dir).count() as i64;
+        Ok::<i64, String>(file_count)
+    })
+    .await
+    .map_err(|e| {
+        let msg = format!("scan task join failed for job {}: {}", job_id, e);
+        error!("{}", msg);
+        msg
+    })?;
+
+    match scan_result {
+        Ok(total_count) => {
+            let finished_at = Utc::now().to_rfc3339();
+            sqlx::query(
+                "UPDATE scan_jobs
+                 SET status = 'success', finished_at = ?, total_count = ?, new_count = 0, updated_count = 0, failed_count = 0, error_message = NULL
+                 WHERE id = ?",
+            )
+            .bind(&finished_at)
+            .bind(total_count)
+            .bind(&job_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                let msg = format!(
+                    "failed to switch scan job {} status running->success for source {}: {}",
+                    job_id, source.id, e
+                );
+                error!("{}", msg);
+                msg
+            })?;
+
+            info!(job_id, source_id = source.id, from = "running", to = "success", total_count, "scan job status transition");
+            Ok(())
+        }
+        Err(scan_error) => {
+            let finished_at = Utc::now().to_rfc3339();
+            sqlx::query(
+                "UPDATE scan_jobs
+                 SET status = 'failed', finished_at = ?, failed_count = 1, error_message = ?
+                 WHERE id = ?",
+            )
+            .bind(&finished_at)
+            .bind(&scan_error)
+            .bind(&job_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                let msg = format!(
+                    "failed to switch scan job {} status running->failed for source {}: {}",
+                    job_id, source.id, e
+                );
+                error!("{}", msg);
+                msg
+            })?;
+
+            error!(job_id, source_id = source.id, from = "running", to = "failed", error = %scan_error, "scan job status transition");
+            Err(scan_error)
+        }
+    }
 }

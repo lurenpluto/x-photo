@@ -47,3 +47,8 @@ pub struct CreateAlbumRequest {
     pub album_date: Option<String>,
     pub rule_key: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct ScanTriggerResponse {
+    pub job_id: String,
+}
