@@ -1,0 +1,127 @@
+openapi: 3.0.3
+info:
+  title: XPhoto Service API
+  version: 1.0.0-draft
+  description: 正式化草案（持续补全）
+servers:
+  - url: /rpc/v1
+paths:
+  /task-jobs/overview:
+    get:
+      summary: 任务总览
+      parameters:
+        - in: query
+          name: include_all_daemon
+          schema: { type: boolean }
+        - in: query
+          name: stale_after_seconds
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskOverviewResponse'
+  /task-jobs/active:
+    get:
+      summary: 当前活跃任务
+      parameters:
+        - in: query
+          name: include_all_daemon
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: ok
+  /task-jobs/health:
+    get:
+      summary: 永续任务健康状态
+      parameters:
+        - in: query
+          name: stale_after_seconds
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: ok
+  /photos/search:
+    post:
+      summary: 照片检索
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PhotoSearchRequest'
+      responses:
+        '200':
+          description: ok
+components:
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data: {}
+      required: [code, message, data]
+    PhotoSearchRequest:
+      type: object
+      properties:
+        keyword: { type: string }
+        album_id: { type: string }
+        source_id: { type: string }
+        start_time: { type: string, format: date-time }
+        end_time: { type: string, format: date-time }
+        order: { type: string, enum: [asc, desc] }
+        page: { type: integer, minimum: 1 }
+        page_size: { type: integer, minimum: 1 }
+    TaskJobData:
+      type: object
+      properties:
+        id: { type: string }
+        job_type: { type: string }
+        trigger_type: { type: string }
+        status: { type: string }
+        is_daemon: { type: boolean }
+        heartbeat_at: { type: string, nullable: true }
+        is_active: { type: boolean }
+        progress_done: { type: integer }
+        progress_total: { type: integer, nullable: true }
+        progress_percent: { type: number, nullable: true }
+      required: [id, job_type, trigger_type, status, is_daemon, is_active, progress_done]
+    DaemonTaskHealthItem:
+      type: object
+      properties:
+        id: { type: string }
+        task_type: { type: string }
+        status: { type: string }
+        heartbeat_at: { type: string, nullable: true }
+        healthy: { type: boolean }
+      required: [id, task_type, status, healthy]
+    TaskHealthData:
+      type: object
+      properties:
+        healthy: { type: boolean }
+        stale_after_seconds: { type: integer }
+        daemon_tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DaemonTaskHealthItem'
+      required: [healthy, stale_after_seconds, daemon_tasks]
+    TaskOverviewData:
+      type: object
+      properties:
+        active_tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskJobData'
+        health:
+          $ref: '#/components/schemas/TaskHealthData'
+      required: [active_tasks, health]
+    TaskOverviewResponse:
+      allOf:
+        - $ref: '#/components/schemas/ApiResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/TaskOverviewData'

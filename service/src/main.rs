@@ -1,13 +1,7 @@
-mod api;
-mod config;
-mod db;
-mod domain;
-mod infra;
-mod logging;
-
 use std::net::SocketAddr;
 
 use axum::Router;
+use service::{api, config, db, logging};
 use sqlx::sqlite::SqlitePoolOptions;
 use tracing::{error, info};
 
