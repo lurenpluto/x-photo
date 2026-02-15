@@ -52,3 +52,40 @@ pub struct CreateAlbumRequest {
 pub struct ScanTriggerResponse {
     pub job_id: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePhotoRemarkRequest {
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchDeletePhotosRequest {
+    pub photo_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchAddToAlbumRequest {
+    pub album_id: String,
+    pub photo_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchOperationResult {
+    pub affected: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAlbumRequest {
+    pub name: Option<String>,
+    pub remark: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetAlbumCoverRequest {
+    pub cover_photo_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlbumPhotosRequest {
+    pub photo_ids: Vec<String>,
+}

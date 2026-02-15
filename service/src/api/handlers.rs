@@ -10,8 +10,10 @@ use sqlx::{Row, SqlitePool};
 use tracing::{error, info, warn};
 
 use crate::api::types::{
-    ApiResponse, CreateAlbumRequest, CreateSourceRequest, PagedData, PhotoSearchRequest,
-    ScanTriggerResponse,
+    AlbumPhotosRequest, ApiResponse, BatchAddToAlbumRequest, BatchDeletePhotosRequest,
+    BatchOperationResult, CreateAlbumRequest, CreateSourceRequest, PagedData,
+    PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, UpdateAlbumRequest,
+    UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -392,6 +394,281 @@ pub async fn create_album(
     info!(album_id = item.id, "create_album completed");
 
     Ok(Json(ApiResponse::ok(item)))
+}
+
+pub async fn update_photo_remark(
+    Path(photo_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdatePhotoRemarkRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(photo_id, "update_photo_remark requested");
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE photos
+         SET remark = ?, updated_at = ?
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(req.remark.as_deref())
+    .bind(&now)
+    .bind(&photo_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "update_photo_remark.update",
+            json!({"photo_id": photo_id}),
+            err,
+        )
+    })?;
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult {
+        affected: result.rows_affected() as i64,
+    })))
+}
+
+pub async fn batch_delete_photos(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchDeletePhotosRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    if req.photo_ids.is_empty() {
+        return Err(bad_request("photo_ids 不能为空"));
+    }
+
+    info!(count = req.photo_ids.len(), "batch_delete_photos requested");
+    let now = Utc::now().to_rfc3339();
+    let mut affected: i64 = 0;
+
+    for photo_id in &req.photo_ids {
+        let result = sqlx::query(
+            "UPDATE photos
+             SET deleted_at = ?, updated_at = ?
+             WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(photo_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "batch_delete_photos.update",
+                json!({"photo_id": photo_id}),
+                err,
+            )
+        })?;
+        affected += result.rows_affected() as i64;
+    }
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
+}
+
+pub async fn batch_add_to_album(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<BatchAddToAlbumRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    if req.photo_ids.is_empty() {
+        return Err(bad_request("photo_ids 不能为空"));
+    }
+    if req.album_id.trim().is_empty() {
+        return Err(bad_request("album_id 不能为空"));
+    }
+
+    let album_exists: Option<String> = sqlx::query_scalar("SELECT id FROM albums WHERE id = ?")
+        .bind(req.album_id.trim())
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "batch_add_to_album.check_album",
+                json!({"album_id": req.album_id}),
+                err,
+            )
+        })?;
+    if album_exists.is_none() {
+        return Err(bad_request("album 不存在"));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut affected: i64 = 0;
+    for photo_id in &req.photo_ids {
+        let result = sqlx::query(
+            "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
+             VALUES (?, ?, NULL, ?)
+             ON CONFLICT(photo_id, album_id) DO NOTHING",
+        )
+        .bind(photo_id)
+        .bind(req.album_id.trim())
+        .bind(&now)
+        .execute(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "batch_add_to_album.insert",
+                json!({"photo_id": photo_id, "album_id": req.album_id}),
+                err,
+            )
+        })?;
+        affected += result.rows_affected() as i64;
+    }
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
+}
+
+pub async fn update_album(
+    Path(album_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdateAlbumRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    if req.name.is_none() && req.remark.is_none() {
+        return Err(bad_request("name/remark 至少一个字段需要更新"));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut current_name: Option<String> = None;
+    if req.name.is_none() {
+        current_name = sqlx::query_scalar("SELECT name FROM albums WHERE id = ?")
+            .bind(&album_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|err| {
+                internal_db_error(
+                    "update_album.get_name",
+                    json!({"album_id": album_id}),
+                    err,
+                )
+            })?;
+        if current_name.is_none() {
+            return Err(bad_request("album 不存在"));
+        }
+    }
+
+    let final_name = req.name.clone().or(current_name).unwrap_or_default();
+    if final_name.trim().is_empty() {
+        return Err(bad_request("album name 不能为空"));
+    }
+
+    let result = sqlx::query(
+        "UPDATE albums
+         SET name = ?, remark = COALESCE(?, remark), updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(final_name.trim())
+    .bind(req.remark.as_deref())
+    .bind(&now)
+    .bind(&album_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "update_album.update",
+            json!({"album_id": album_id}),
+            err,
+        )
+    })?;
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult {
+        affected: result.rows_affected() as i64,
+    })))
+}
+
+pub async fn set_album_cover(
+    Path(album_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetAlbumCoverRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    if req.cover_photo_id.trim().is_empty() {
+        return Err(bad_request("cover_photo_id 不能为空"));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE albums
+         SET cover_photo_id = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(req.cover_photo_id.trim())
+    .bind(&now)
+    .bind(&album_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "set_album_cover.update",
+            json!({"album_id": album_id, "cover_photo_id": req.cover_photo_id}),
+            err,
+        )
+    })?;
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult {
+        affected: result.rows_affected() as i64,
+    })))
+}
+
+pub async fn album_add_photos(
+    Path(album_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AlbumPhotosRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    if req.photo_ids.is_empty() {
+        return Err(bad_request("photo_ids 不能为空"));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut affected: i64 = 0;
+    for photo_id in &req.photo_ids {
+        let result = sqlx::query(
+            "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
+             VALUES (?, ?, NULL, ?)
+             ON CONFLICT(photo_id, album_id) DO NOTHING",
+        )
+        .bind(photo_id)
+        .bind(&album_id)
+        .bind(&now)
+        .execute(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "album_add_photos.insert",
+                json!({"album_id": album_id, "photo_id": photo_id}),
+                err,
+            )
+        })?;
+        affected += result.rows_affected() as i64;
+    }
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
+}
+
+pub async fn album_remove_photos(
+    Path(album_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<AlbumPhotosRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    if req.photo_ids.is_empty() {
+        return Err(bad_request("photo_ids 不能为空"));
+    }
+
+    let mut affected: i64 = 0;
+    for photo_id in &req.photo_ids {
+        let result = sqlx::query(
+            "DELETE FROM photo_albums
+             WHERE album_id = ? AND photo_id = ?",
+        )
+        .bind(&album_id)
+        .bind(photo_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "album_remove_photos.delete",
+                json!({"album_id": album_id, "photo_id": photo_id}),
+                err,
+            )
+        })?;
+        affected += result.rows_affected() as i64;
+    }
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
 }
 
 fn sha256_hex(input: &str) -> String {
