@@ -89,3 +89,27 @@ pub struct SetAlbumCoverRequest {
 pub struct AlbumPhotosRequest {
     pub photo_ids: Vec<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct PaginationQuery {
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlbumSimple {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhotoDetailData {
+    pub photo: crate::domain::models::Photo,
+    pub albums: Vec<AlbumSimple>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlbumDetailData {
+    pub album: crate::domain::models::Album,
+    pub photos: PagedData<crate::domain::models::Photo>,
+}

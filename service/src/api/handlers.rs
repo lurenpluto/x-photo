@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path as StdPath;
 use std::sync::Arc;
 
-use axum::{extract::Path, extract::State, http::StatusCode, Json};
+use axum::{extract::Path, extract::Query, extract::State, http::StatusCode, Json};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -10,10 +10,10 @@ use sqlx::{Row, SqlitePool};
 use tracing::{error, info, warn};
 
 use crate::api::types::{
-    AlbumPhotosRequest, ApiResponse, BatchAddToAlbumRequest, BatchDeletePhotosRequest,
-    BatchOperationResult, CreateAlbumRequest, CreateSourceRequest, PagedData,
-    PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, UpdateAlbumRequest,
-    UpdatePhotoRemarkRequest,
+    AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
+    BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
+    PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest, ScanTriggerResponse,
+    SetAlbumCoverRequest, UpdateAlbumRequest, UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -312,6 +312,129 @@ pub async fn search_photos(
         page_size,
         items,
     })))
+}
+
+pub async fn get_photo_detail(
+    Path(photo_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<PhotoDetailData>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(photo_id, "get_photo_detail requested");
+
+    let photo = sqlx::query_as::<_, Photo>(
+        "SELECT id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
+                content_hash, shot_at, created_at_fs, modified_at_fs, sort_time, width, height,
+                exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
+         FROM photos
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&photo_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("get_photo_detail.photo", json!({"photo_id": photo_id}), err))?
+    .ok_or_else(|| bad_request("photo 不存在"))?;
+
+    let album_rows = sqlx::query(
+        "SELECT a.id, a.name
+         FROM albums a
+         INNER JOIN photo_albums pa ON pa.album_id = a.id
+         WHERE pa.photo_id = ?
+         ORDER BY a.created_at DESC",
+    )
+    .bind(&photo.id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "get_photo_detail.albums",
+            json!({"photo_id": photo.id}),
+            err,
+        )
+    })?;
+
+    let albums = album_rows
+        .into_iter()
+        .map(|row| AlbumSimple {
+            id: row.get::<String, _>("id"),
+            name: row.get::<String, _>("name"),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(ApiResponse::ok(PhotoDetailData { photo, albums })))
+}
+
+pub async fn get_album_detail(
+    Path(album_id): Path<String>,
+    Query(query): Query<PaginationQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<AlbumDetailData>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(100).clamp(1, 500);
+    let offset = (page - 1) * page_size;
+
+    info!(album_id, page, page_size, "get_album_detail requested");
+
+    let album = sqlx::query_as::<_, Album>(
+        "SELECT id, name, remark, cover_photo_id, auto_created, album_date, rule_key, created_at, updated_at
+         FROM albums
+         WHERE id = ?",
+    )
+    .bind(&album_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("get_album_detail.album", json!({"album_id": album_id}), err))?
+    .ok_or_else(|| bad_request("album 不存在"))?;
+
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1)
+         FROM photo_albums pa
+         INNER JOIN photos p ON p.id = pa.photo_id
+         WHERE pa.album_id = ? AND p.deleted_at IS NULL",
+    )
+    .bind(&album.id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "get_album_detail.count",
+            json!({"album_id": album.id}),
+            err,
+        )
+    })?;
+
+    let photos = sqlx::query_as::<_, Photo>(
+        "SELECT p.id, p.source_id, p.storage_file_id, p.file_path, p.file_name, p.file_ext, p.file_size, p.mime_type,
+                p.content_hash, p.shot_at, p.created_at_fs, p.modified_at_fs, p.sort_time, p.width, p.height,
+                p.exif_json, p.gps_lat, p.gps_lng, p.remark, p.deleted_at, p.created_at, p.updated_at
+         FROM photos p
+         INNER JOIN photo_albums pa ON pa.photo_id = p.id
+         WHERE pa.album_id = ? AND p.deleted_at IS NULL
+         ORDER BY p.sort_time DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(&album.id)
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "get_album_detail.photos",
+            json!({"album_id": album.id, "page": page, "page_size": page_size}),
+            err,
+        )
+    })?;
+
+    let data = AlbumDetailData {
+        album,
+        photos: PagedData {
+            total,
+            page,
+            page_size,
+            items: photos,
+        },
+    };
+
+    Ok(Json(ApiResponse::ok(data)))
 }
 
 pub async fn list_albums(
