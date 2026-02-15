@@ -1,6 +1,7 @@
 mod api;
 mod db;
 mod domain;
+mod infra;
 
 use std::net::SocketAddr;
 
