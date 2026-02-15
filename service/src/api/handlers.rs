@@ -13,9 +13,9 @@ use tracing::{error, info, warn};
 use crate::api::types::{
     AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
     BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
-    FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest,
-    ScanTriggerResponse, SetAlbumCoverRequest, TaskJobData, TaskJobsQuery, UpdateAlbumRequest,
-    UpdatePhotoRemarkRequest,
+    ActiveTaskQuery, FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData,
+    PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, TaskJobData, TaskJobsQuery,
+    UpdateAlbumRequest, UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -499,7 +499,7 @@ pub async fn list_task_jobs(
         })?;
 
     let mut list_builder = QueryBuilder::<Sqlite>::new(
-        "SELECT id, job_type, trigger_type, status, scan_job_id, payload_json, checkpoint_json,
+        "SELECT id, job_type, trigger_type, status, is_daemon, heartbeat_at, scan_job_id, payload_json, checkpoint_json,
                 progress_done, progress_total, retry_count, max_retries, error_message,
                 run_after, started_at, finished_at, created_at, updated_at
          FROM task_jobs tj
@@ -534,6 +534,38 @@ pub async fn list_task_jobs(
     })))
 }
 
+pub async fn list_active_task_jobs(
+    Query(query): Query<ActiveTaskQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<Vec<TaskJobData>>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let include_all_daemon = query.include_all_daemon.unwrap_or(true);
+    info!(include_all_daemon, "list_active_task_jobs requested");
+
+    let sql = if include_all_daemon {
+        "SELECT id, job_type, trigger_type, status, is_daemon, heartbeat_at, scan_job_id, payload_json, checkpoint_json,
+                progress_done, progress_total, retry_count, max_retries, error_message,
+                run_after, started_at, finished_at, created_at, updated_at
+         FROM task_jobs
+         WHERE status IN ('pending', 'running') OR is_daemon = 1
+         ORDER BY updated_at DESC"
+    } else {
+        "SELECT id, job_type, trigger_type, status, is_daemon, heartbeat_at, scan_job_id, payload_json, checkpoint_json,
+                progress_done, progress_total, retry_count, max_retries, error_message,
+                run_after, started_at, finished_at, created_at, updated_at
+         FROM task_jobs
+         WHERE status IN ('pending', 'running')
+         ORDER BY updated_at DESC"
+    };
+
+    let rows = sqlx::query(sql)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|err| internal_db_error("list_active_task_jobs.fetch", json!({"include_all_daemon": include_all_daemon}), err))?;
+
+    let items = rows.into_iter().map(task_job_from_row).collect::<Vec<_>>();
+    Ok(Json(ApiResponse::ok(items)))
+}
+
 pub async fn get_task_job(
     Path(job_id): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -541,7 +573,7 @@ pub async fn get_task_job(
     info!(job_id, "get_task_job requested");
 
     let row = sqlx::query(
-        "SELECT id, job_type, trigger_type, status, scan_job_id, payload_json, checkpoint_json,
+        "SELECT id, job_type, trigger_type, status, is_daemon, heartbeat_at, scan_job_id, payload_json, checkpoint_json,
                 progress_done, progress_total, retry_count, max_retries, error_message,
                 run_after, started_at, finished_at, created_at, updated_at
          FROM task_jobs
@@ -887,6 +919,8 @@ fn task_job_from_row(row: sqlx::sqlite::SqliteRow) -> TaskJobData {
         job_type: row.get("job_type"),
         trigger_type: row.get("trigger_type"),
         status: row.get("status"),
+        is_daemon: row.get::<i64, _>("is_daemon") == 1,
+        heartbeat_at: row.get("heartbeat_at"),
         scan_job_id: row.get("scan_job_id"),
         payload_json: row.get("payload_json"),
         checkpoint_json: row.get("checkpoint_json"),
@@ -1477,24 +1511,23 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
 
         let now = Utc::now().to_rfc3339();
         if scan_status == "pending" || scan_status == "running" {
-            if task_status == "pending" {
-                let checkpoint = json!({
-                    "scan_job_id": scan_job_id,
-                    "scan_status": scan_status,
-                });
-                sqlx::query(
-                    "UPDATE task_jobs
-                     SET status = 'running', scan_job_id = ?, checkpoint_json = ?, updated_at = ?
-                     WHERE id = ? AND status = 'pending'",
-                )
-                .bind(&scan_job_id)
-                .bind(checkpoint.to_string())
-                .bind(&now)
-                .bind(&task_id)
-                .execute(&state.pool)
-                .await
-                .map_err(|e| format!("failed to set task running in reconcile (task_id={}): {}", task_id, e))?;
-            }
+            let checkpoint = json!({
+                "scan_job_id": scan_job_id,
+                "scan_status": scan_status,
+            });
+            sqlx::query(
+                "UPDATE task_jobs
+                 SET status = 'running', scan_job_id = ?, checkpoint_json = ?, heartbeat_at = ?, updated_at = ?
+                 WHERE id = ? AND status IN ('pending', 'running')",
+            )
+            .bind(&scan_job_id)
+            .bind(checkpoint.to_string())
+            .bind(&now)
+            .bind(&now)
+            .bind(&task_id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| format!("failed to update running task heartbeat in reconcile (task_id={}, prev_status={}): {}", task_id, task_status, e))?;
             continue;
         }
 
@@ -1508,7 +1541,7 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
         sqlx::query(
             "UPDATE task_jobs
              SET status = ?, progress_done = ?, progress_total = ?, error_message = ?,
-                 finished_at = COALESCE(?, finished_at), checkpoint_json = ?, updated_at = ?
+                 finished_at = COALESCE(?, finished_at), heartbeat_at = ?, checkpoint_json = ?, updated_at = ?
              WHERE id = ? AND status IN ('pending', 'running')",
         )
         .bind(&scan_status)
@@ -1516,6 +1549,7 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
         .bind(total_count)
         .bind(error_message.as_deref())
         .bind(finished_at.as_deref())
+        .bind(&now)
         .bind(checkpoint.to_string())
         .bind(&now)
         .bind(&task_id)
@@ -1538,7 +1572,7 @@ async fn create_scan_task_job(
     sqlx::query(
         "INSERT INTO task_jobs (
             id, job_type, trigger_type, status,
-            scan_job_id,
+            is_daemon, heartbeat_at, scan_job_id,
             payload_json, checkpoint_json,
             progress_done, progress_total,
             retry_count, max_retries,
@@ -1547,6 +1581,7 @@ async fn create_scan_task_job(
             created_at, updated_at
          ) VALUES (
             ?, 'scan', ?, 'pending',
+            0, NULL,
             NULL,
             ?, NULL,
             0, NULL,
@@ -1676,11 +1711,13 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
         "UPDATE task_jobs
          SET status = 'running', scan_job_id = ?, checkpoint_json = ?,
              progress_done = 0, progress_total = NULL,
+             heartbeat_at = ?,
              finished_at = NULL, updated_at = ?
          WHERE id = ?",
     )
     .bind(&scan_job_id)
     .bind(checkpoint.to_string())
+    .bind(&now_after_enqueue)
     .bind(&now_after_enqueue)
     .bind(task_job_id)
     .execute(&state.pool)

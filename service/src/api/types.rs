@@ -138,6 +138,8 @@ pub struct TaskJobData {
     pub job_type: String,
     pub trigger_type: String,
     pub status: String,
+    pub is_daemon: bool,
+    pub heartbeat_at: Option<String>,
     pub scan_job_id: Option<String>,
     pub payload_json: Option<String>,
     pub checkpoint_json: Option<String>,
@@ -151,4 +153,9 @@ pub struct TaskJobData {
     pub finished_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActiveTaskQuery {
+    pub include_all_daemon: Option<bool>,
 }

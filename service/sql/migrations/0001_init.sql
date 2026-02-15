@@ -84,6 +84,8 @@ CREATE TABLE IF NOT EXISTS task_jobs (
   job_type TEXT NOT NULL,
   trigger_type TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
+  is_daemon INTEGER NOT NULL DEFAULT 0 CHECK (is_daemon IN (0, 1)),
+  heartbeat_at TEXT,
   scan_job_id TEXT,
   payload_json TEXT,
   checkpoint_json TEXT,
@@ -131,3 +133,4 @@ CREATE INDEX IF NOT EXISTS idx_source_scan_states_status ON source_scan_states (
 CREATE INDEX IF NOT EXISTS idx_task_jobs_status_run_after ON task_jobs (status, run_after);
 CREATE INDEX IF NOT EXISTS idx_task_jobs_type_status ON task_jobs (job_type, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_jobs_scan_job_id ON task_jobs (scan_job_id);
+CREATE INDEX IF NOT EXISTS idx_task_jobs_active ON task_jobs (status, is_daemon, updated_at DESC);
