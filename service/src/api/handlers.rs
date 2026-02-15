@@ -14,8 +14,9 @@ use crate::api::types::{
     AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
     BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
     ActiveTaskQuery, FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData,
-    PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, TaskJobData, TaskJobsQuery,
-    UpdateAlbumRequest, UpdatePhotoRemarkRequest,
+    PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, DaemonTaskHealthItem,
+    TaskHealthData, TaskHealthQuery, TaskJobData, TaskJobsQuery, UpdateAlbumRequest,
+    UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -564,6 +565,69 @@ pub async fn list_active_task_jobs(
 
     let items = rows.into_iter().map(task_job_from_row).collect::<Vec<_>>();
     Ok(Json(ApiResponse::ok(items)))
+}
+
+pub async fn get_task_health(
+    Query(query): Query<TaskHealthQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<TaskHealthData>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let stale_after_seconds = query.stale_after_seconds.unwrap_or(15).max(1);
+    info!(stale_after_seconds, "get_task_health requested");
+
+    let rows = sqlx::query(
+        "SELECT id, job_type, status, heartbeat_at
+         FROM task_jobs
+         WHERE is_daemon = 1
+         ORDER BY updated_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "get_task_health.fetch",
+            json!({"stale_after_seconds": stale_after_seconds}),
+            err,
+        )
+    })?;
+
+    let now = Utc::now();
+    let mut all_healthy = true;
+    let mut daemon_tasks = Vec::with_capacity(rows.len());
+
+    for row in rows {
+        let id: String = row.get("id");
+        let task_type: String = row.get("job_type");
+        let status: String = row.get("status");
+        let heartbeat_at: Option<String> = row.get("heartbeat_at");
+
+        let heartbeat_healthy = heartbeat_at
+            .as_deref()
+            .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
+            .map(|dt| {
+                let dt_utc = dt.with_timezone(&Utc);
+                (now - dt_utc).num_seconds() <= stale_after_seconds
+            })
+            .unwrap_or(false);
+
+        let healthy = status == "running" && heartbeat_healthy;
+        if !healthy {
+            all_healthy = false;
+        }
+
+        daemon_tasks.push(DaemonTaskHealthItem {
+            id,
+            task_type,
+            status,
+            heartbeat_at,
+            healthy,
+        });
+    }
+
+    Ok(Json(ApiResponse::ok(TaskHealthData {
+        healthy: all_healthy,
+        stale_after_seconds,
+        daemon_tasks,
+    })))
 }
 
 pub async fn get_task_job(

@@ -36,6 +36,7 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .route("/rpc/v1/scan-jobs/{job_id}/retry", post(handlers::retry_scan_job))
         .route("/rpc/v1/task-jobs", get(handlers::list_task_jobs))
         .route("/rpc/v1/task-jobs/active", get(handlers::list_active_task_jobs))
+        .route("/rpc/v1/task-jobs/health", get(handlers::get_task_health))
         .route("/rpc/v1/task-jobs/{job_id}", get(handlers::get_task_job))
         .route("/rpc/v1/task-jobs/{job_id}/cancel", post(handlers::cancel_task_job))
         .route("/rpc/v1/task-jobs/{job_id}/retry", post(handlers::retry_task_job))

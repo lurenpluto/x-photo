@@ -161,3 +161,24 @@ pub struct TaskJobData {
 pub struct ActiveTaskQuery {
     pub include_all_daemon: Option<bool>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct DaemonTaskHealthItem {
+    pub id: String,
+    pub task_type: String,
+    pub status: String,
+    pub heartbeat_at: Option<String>,
+    pub healthy: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskHealthData {
+    pub healthy: bool,
+    pub stale_after_seconds: i64,
+    pub daemon_tasks: Vec<DaemonTaskHealthItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaskHealthQuery {
+    pub stale_after_seconds: Option<i64>,
+}
