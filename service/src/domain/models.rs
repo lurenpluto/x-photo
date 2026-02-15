@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::FromRow;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Source {
     pub id: String,
     pub name: String,
@@ -12,7 +13,7 @@ pub struct Source {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Photo {
     pub id: String,
     pub source_id: String,
@@ -38,7 +39,7 @@ pub struct Photo {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Album {
     pub id: String,
     pub name: String,
@@ -51,7 +52,7 @@ pub struct Album {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PhotoAlbum {
     pub photo_id: String,
     pub album_id: String,
@@ -59,7 +60,7 @@ pub struct PhotoAlbum {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ScanJob {
     pub id: String,
     pub source_id: String,
@@ -73,7 +74,7 @@ pub struct ScanJob {
     pub error_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PhotoFeature {
     pub photo_id: String,
     pub version: i32,
