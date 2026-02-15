@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use filetime::{set_file_mtime, FileTime};
 use image::{ImageBuffer, Rgb};
@@ -34,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         set_file_mtime(&file_path, ft)?;
 
         if !exif_time.is_empty() {
-            set_exif_if_possible(&file_path, exif_time);
+            set_exif_datetime_in_jpeg(&file_path, exif_time)?;
         }
     }
 
@@ -136,22 +135,76 @@ fn glyph_5x7(c: char) -> [u8; 7] {
     }
 }
 
-fn set_exif_if_possible(path: &Path, date_time_original: &str) {
-    let output = Command::new("exiftool")
-        .arg("-overwrite_original")
-        .arg(format!("-DateTimeOriginal={}", date_time_original))
-        .arg(format!("-CreateDate={}", date_time_original))
-        .arg(format!("-ModifyDate={}", date_time_original))
-        .arg(path)
-        .output();
-
-    match output {
-        Ok(result) if result.status.success() => {}
-        Ok(_) | Err(_) => {
-            eprintln!(
-                "warn: exiftool not available or failed, skip exif write for {}",
-                path.display()
-            );
-        }
+fn set_exif_datetime_in_jpeg(
+    path: &Path,
+    date_time_original: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if date_time_original.len() != 19 {
+        return Err(format!(
+            "invalid exif datetime format '{}', expect YYYY:MM:DD HH:MM:SS",
+            date_time_original
+        )
+        .into());
     }
+
+    let mut jpeg = std::fs::read(path)?;
+    if jpeg.len() < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8 {
+        return Err(format!("{} is not a valid jpeg file", path.display()).into());
+    }
+
+    let exif_payload = build_exif_payload(date_time_original);
+    let mut out = Vec::with_capacity(jpeg.len() + exif_payload.len() + 4);
+    out.extend_from_slice(&jpeg[0..2]);
+
+    out.push(0xFF);
+    out.push(0xE1);
+    let seg_len = (exif_payload.len() + 2) as u16;
+    out.extend_from_slice(&seg_len.to_be_bytes());
+    out.extend_from_slice(&exif_payload);
+
+    out.extend_from_slice(&jpeg.split_off(2));
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+fn build_exif_payload(date_time_original: &str) -> Vec<u8> {
+    let dt = format!("{}\0", date_time_original).into_bytes();
+
+    let tiff_header_len = 8_u32;
+    let ifd0_entries = 2_u16;
+    let ifd0_len = 2_u32 + (ifd0_entries as u32) * 12 + 4;
+    let dt0_offset = tiff_header_len + ifd0_len;
+    let exif_ifd_offset = dt0_offset + (dt.len() as u32);
+    let exif_ifd_entries = 1_u16;
+    let exif_ifd_len = 2_u32 + (exif_ifd_entries as u32) * 12 + 4;
+    let dto_offset = exif_ifd_offset + exif_ifd_len;
+
+    let mut tiff = Vec::new();
+    tiff.extend_from_slice(b"II*");
+    tiff.push(0x00);
+    tiff.extend_from_slice(&8_u32.to_le_bytes());
+
+    tiff.extend_from_slice(&ifd0_entries.to_le_bytes());
+    append_ifd_entry(&mut tiff, 0x0132, 2, dt.len() as u32, dt0_offset);
+    append_ifd_entry(&mut tiff, 0x8769, 4, 1, exif_ifd_offset);
+    tiff.extend_from_slice(&0_u32.to_le_bytes());
+
+    tiff.extend_from_slice(&dt);
+
+    tiff.extend_from_slice(&exif_ifd_entries.to_le_bytes());
+    append_ifd_entry(&mut tiff, 0x9003, 2, dt.len() as u32, dto_offset);
+    tiff.extend_from_slice(&0_u32.to_le_bytes());
+    tiff.extend_from_slice(&dt);
+
+    let mut payload = Vec::with_capacity(6 + tiff.len());
+    payload.extend_from_slice(b"Exif\0\0");
+    payload.extend_from_slice(&tiff);
+    payload
+}
+
+fn append_ifd_entry(buf: &mut Vec<u8>, tag: u16, ty: u16, count: u32, value_or_offset: u32) {
+    buf.extend_from_slice(&tag.to_le_bytes());
+    buf.extend_from_slice(&ty.to_le_bytes());
+    buf.extend_from_slice(&count.to_le_bytes());
+    buf.extend_from_slice(&value_or_offset.to_le_bytes());
 }
