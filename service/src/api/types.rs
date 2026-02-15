@@ -145,6 +145,8 @@ pub struct TaskJobData {
     pub checkpoint_json: Option<String>,
     pub progress_done: i64,
     pub progress_total: Option<i64>,
+    pub progress_percent: Option<f64>,
+    pub is_active: bool,
     pub retry_count: i64,
     pub max_retries: i64,
     pub error_message: Option<String>,

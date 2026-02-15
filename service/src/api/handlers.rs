@@ -914,18 +914,32 @@ fn apply_task_job_filters(
 }
 
 fn task_job_from_row(row: sqlx::sqlite::SqliteRow) -> TaskJobData {
+    let status: String = row.get("status");
+    let progress_done: i64 = row.get("progress_done");
+    let progress_total: Option<i64> = row.get("progress_total");
+    let progress_percent = progress_total.and_then(|total| {
+        if total > 0 {
+            let percent = (progress_done as f64) * 100.0 / (total as f64);
+            Some(percent.min(100.0))
+        } else {
+            None
+        }
+    });
+
     TaskJobData {
         id: row.get("id"),
         job_type: row.get("job_type"),
         trigger_type: row.get("trigger_type"),
-        status: row.get("status"),
+        status: status.clone(),
         is_daemon: row.get::<i64, _>("is_daemon") == 1,
         heartbeat_at: row.get("heartbeat_at"),
         scan_job_id: row.get("scan_job_id"),
         payload_json: row.get("payload_json"),
         checkpoint_json: row.get("checkpoint_json"),
-        progress_done: row.get("progress_done"),
-        progress_total: row.get("progress_total"),
+        progress_done,
+        progress_total,
+        progress_percent,
+        is_active: status == "pending" || status == "running",
         retry_count: row.get("retry_count"),
         max_retries: row.get("max_retries"),
         error_message: row.get("error_message"),
@@ -1453,7 +1467,14 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
 pub fn start_task_dispatcher(state: Arc<AppState>) {
     let interval_ms = state.config.scan.task_dispatch_interval_ms.max(200);
     tokio::spawn(async move {
+        if let Err(e) = ensure_daemon_task_row(state.clone(), "daemon:task_dispatcher", "task_dispatcher").await {
+            error!(error = %e, "failed to ensure task dispatcher daemon row");
+        }
+
         loop {
+            if let Err(e) = update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await {
+                error!(error = %e, "failed to update task dispatcher heartbeat");
+            }
             if let Err(e) = dispatch_one_pending_scan_task(state.clone()).await {
                 error!(error = %e, "task dispatcher iteration failed");
             }
@@ -1463,6 +1484,68 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
             sleep(Duration::from_millis(interval_ms)).await;
         }
     });
+}
+
+async fn ensure_daemon_task_row(
+    state: Arc<AppState>,
+    daemon_id: &str,
+    daemon_type: &str,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO task_jobs (
+            id, job_type, trigger_type, status,
+            is_daemon, heartbeat_at,
+            scan_job_id,
+            payload_json, checkpoint_json,
+            progress_done, progress_total,
+            retry_count, max_retries,
+            error_message, run_after,
+            started_at, finished_at,
+            created_at, updated_at
+         ) VALUES (
+            ?, ?, 'system', 'running',
+            1, ?,
+            NULL,
+            NULL, NULL,
+            0, NULL,
+            0, 0,
+            NULL, NULL,
+            ?, NULL,
+            ?, ?
+         )
+         ON CONFLICT(id) DO UPDATE SET
+            is_daemon = 1,
+            status = 'running',
+            heartbeat_at = excluded.heartbeat_at,
+            updated_at = excluded.updated_at",
+    )
+    .bind(daemon_id)
+    .bind(daemon_type)
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("failed to upsert daemon task row (id={}): {}", daemon_id, e))?;
+    Ok(())
+}
+
+async fn update_daemon_heartbeat(state: Arc<AppState>, daemon_id: &str) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE task_jobs
+         SET heartbeat_at = ?, updated_at = ?
+         WHERE id = ? AND is_daemon = 1",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(daemon_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("failed to update daemon heartbeat (id={}): {}", daemon_id, e))?;
+    Ok(())
 }
 
 async fn dispatch_one_pending_scan_task(state: Arc<AppState>) -> Result<(), String> {
