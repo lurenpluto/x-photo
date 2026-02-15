@@ -12,8 +12,8 @@ use tracing::{error, info, warn};
 use crate::api::types::{
     AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
     BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
-    PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest, ScanTriggerResponse,
-    SetAlbumCoverRequest, UpdateAlbumRequest, UpdatePhotoRemarkRequest,
+    FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest,
+    ScanTriggerResponse, SetAlbumCoverRequest, UpdateAlbumRequest, UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -152,6 +152,117 @@ pub async fn trigger_source_scan(
     }
 
     let job_id = enqueue_scan_job(state.clone(), source, "manual")
+        .await
+        .map_err(|msg| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    code: 500,
+                    message: msg,
+                    data: json!({}),
+                }),
+            )
+        })?;
+
+    Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id })))
+}
+
+pub async fn trigger_source_scan_fs_watch(
+    Path(source_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<FsWatchScanTriggerRequest>,
+) -> Result<Json<ApiResponse<ScanTriggerResponse>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(source_id, changed_paths = req.changed_paths.len(), "trigger_source_scan_fs_watch requested");
+
+    if req.changed_paths.is_empty() {
+        return Err(bad_request("changed_paths 不能为空"));
+    }
+
+    let source = sqlx::query_as::<_, Source>(
+        "SELECT id, name, root_path, source_type, enabled, created_at, updated_at
+         FROM sources
+         WHERE id = ?",
+    )
+    .bind(&source_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "trigger_source_scan_fs_watch.find_source",
+            json!({"source_id": source_id}),
+            err,
+        )
+    })?
+    .ok_or_else(|| bad_request("source 不存在"))?;
+
+    if !source.enabled {
+        return Err(bad_request("source 已禁用，无法扫描"));
+    }
+
+    let existing_job_id: Option<String> = sqlx::query_scalar(
+        "SELECT id
+         FROM scan_jobs
+         WHERE source_id = ? AND trigger_type = 'fs_watch' AND status IN ('pending', 'running')
+         ORDER BY started_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(&source.id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "trigger_source_scan_fs_watch.find_existing",
+            json!({"source_id": source.id}),
+            err,
+        )
+    })?;
+
+    if let Some(job_id) = existing_job_id {
+        info!(source_id = source.id, job_id, "reuse existing fs_watch scan job");
+        return Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id })));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let payload = json!({
+        "source_id": source.id,
+        "changed_paths": req.changed_paths,
+    });
+    let task_job_id = sha256_hex(&format!("task:fs_watch:{}:{}", source.id, now));
+    sqlx::query(
+        "INSERT INTO task_jobs (
+            id, job_type, trigger_type, status,
+            payload_json, checkpoint_json,
+            progress_done, progress_total,
+            retry_count, max_retries,
+            error_message, run_after,
+            started_at, finished_at,
+            created_at, updated_at
+         ) VALUES (
+            ?, 'scan', 'fs_watch', 'pending',
+            ?, NULL,
+            0, NULL,
+            0, 3,
+            NULL, ?,
+            NULL, NULL,
+            ?, ?
+         )",
+    )
+    .bind(&task_job_id)
+    .bind(payload.to_string())
+    .bind(&now)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "trigger_source_scan_fs_watch.insert_task",
+            json!({"task_job_id": task_job_id, "source_id": source.id}),
+            err,
+        )
+    })?;
+
+    let job_id = enqueue_scan_job(state.clone(), source, "fs_watch")
         .await
         .map_err(|msg| {
             (

@@ -28,6 +28,7 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .route("/rpc/v1/health", get(handlers::health))
         .route("/rpc/v1/sources", get(handlers::list_sources).post(handlers::create_source))
         .route("/rpc/v1/sources/{source_id}/scan", post(handlers::trigger_source_scan))
+        .route("/rpc/v1/sources/{source_id}/scan:fs-watch", post(handlers::trigger_source_scan_fs_watch))
         .route("/rpc/v1/scan-jobs/{job_id}", get(handlers::get_scan_job))
         .route("/rpc/v1/scan-jobs/{job_id}/cancel", post(handlers::cancel_scan_job))
         .route("/rpc/v1/scan-jobs/{job_id}/retry", post(handlers::retry_scan_job))

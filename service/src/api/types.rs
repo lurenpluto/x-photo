@@ -118,3 +118,8 @@ pub struct AlbumDetailData {
     pub album: crate::domain::models::Album,
     pub photos: PagedData<crate::domain::models::Photo>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct FsWatchScanTriggerRequest {
+    pub changed_paths: Vec<String>,
+}
