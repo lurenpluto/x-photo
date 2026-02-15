@@ -138,6 +138,7 @@ pub struct TaskJobData {
     pub job_type: String,
     pub trigger_type: String,
     pub status: String,
+    pub scan_job_id: Option<String>,
     pub payload_json: Option<String>,
     pub checkpoint_json: Option<String>,
     pub progress_done: i64,

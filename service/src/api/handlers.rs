@@ -499,7 +499,7 @@ pub async fn list_task_jobs(
         })?;
 
     let mut list_builder = QueryBuilder::<Sqlite>::new(
-        "SELECT id, job_type, trigger_type, status, payload_json, checkpoint_json,
+        "SELECT id, job_type, trigger_type, status, scan_job_id, payload_json, checkpoint_json,
                 progress_done, progress_total, retry_count, max_retries, error_message,
                 run_after, started_at, finished_at, created_at, updated_at
          FROM task_jobs tj
@@ -541,7 +541,7 @@ pub async fn get_task_job(
     info!(job_id, "get_task_job requested");
 
     let row = sqlx::query(
-        "SELECT id, job_type, trigger_type, status, payload_json, checkpoint_json,
+        "SELECT id, job_type, trigger_type, status, scan_job_id, payload_json, checkpoint_json,
                 progress_done, progress_total, retry_count, max_retries, error_message,
                 run_after, started_at, finished_at, created_at, updated_at
          FROM task_jobs
@@ -607,6 +607,7 @@ pub async fn retry_task_job(
     let result = sqlx::query(
         "UPDATE task_jobs
          SET status = 'pending', retry_count = retry_count + 1,
+             scan_job_id = NULL, checkpoint_json = NULL,
              error_message = NULL, started_at = NULL, finished_at = NULL,
              run_after = ?, updated_at = ?
          WHERE id = ?",
@@ -797,6 +798,7 @@ fn task_job_from_row(row: sqlx::sqlite::SqliteRow) -> TaskJobData {
         job_type: row.get("job_type"),
         trigger_type: row.get("trigger_type"),
         status: row.get("status"),
+        scan_job_id: row.get("scan_job_id"),
         payload_json: row.get("payload_json"),
         checkpoint_json: row.get("checkpoint_json"),
         progress_done: row.get("progress_done"),
@@ -1368,6 +1370,7 @@ async fn create_scan_task_job(
     sqlx::query(
         "INSERT INTO task_jobs (
             id, job_type, trigger_type, status,
+            scan_job_id,
             payload_json, checkpoint_json,
             progress_done, progress_total,
             retry_count, max_retries,
@@ -1376,6 +1379,7 @@ async fn create_scan_task_job(
             created_at, updated_at
          ) VALUES (
             ?, 'scan', ?, 'pending',
+            NULL,
             ?, NULL,
             0, NULL,
             0, 3,
@@ -1404,7 +1408,7 @@ async fn create_scan_task_job(
 
 async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Result<String, String> {
     let task_row = sqlx::query(
-        "SELECT id, status, trigger_type, payload_json
+        "SELECT id, status, trigger_type, scan_job_id, payload_json
          FROM task_jobs
          WHERE id = ? AND job_type = 'scan'",
     )
@@ -1416,6 +1420,11 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
 
     let status: String = task_row.get("status");
     if status != "pending" {
+        let existing_scan_job_id: Option<String> = task_row.get("scan_job_id");
+        if let Some(scan_job_id) = existing_scan_job_id {
+            return Ok(scan_job_id);
+        }
+
         let checkpoint_json: Option<String> = sqlx::query_scalar(
             "SELECT checkpoint_json FROM task_jobs WHERE id = ?",
         )
@@ -1497,10 +1506,11 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
     let checkpoint = json!({"scan_job_id": scan_job_id});
     sqlx::query(
         "UPDATE task_jobs
-         SET status = 'success', checkpoint_json = ?, progress_done = 1, progress_total = 1,
+         SET status = 'success', scan_job_id = ?, checkpoint_json = ?, progress_done = 1, progress_total = 1,
              finished_at = ?, updated_at = ?
          WHERE id = ?",
     )
+    .bind(&scan_job_id)
     .bind(checkpoint.to_string())
     .bind(&done_at)
     .bind(&done_at)

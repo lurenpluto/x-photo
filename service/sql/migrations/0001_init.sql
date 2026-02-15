@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS task_jobs (
   job_type TEXT NOT NULL,
   trigger_type TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
+  scan_job_id TEXT,
   payload_json TEXT,
   checkpoint_json TEXT,
   progress_done INTEGER NOT NULL DEFAULT 0,
@@ -129,3 +130,4 @@ CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_source_scan_states_status ON source_scan_states (status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_jobs_status_run_after ON task_jobs (status, run_after);
 CREATE INDEX IF NOT EXISTS idx_task_jobs_type_status ON task_jobs (job_type, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_jobs_scan_job_id ON task_jobs (scan_job_id);
