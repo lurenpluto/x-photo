@@ -13,7 +13,8 @@ use crate::api::types::{
     AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
     BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
     FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest,
-    ScanTriggerResponse, SetAlbumCoverRequest, UpdateAlbumRequest, UpdatePhotoRemarkRequest,
+    ScanTriggerResponse, SetAlbumCoverRequest, TaskJobData, TaskJobsQuery, UpdateAlbumRequest,
+    UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -457,6 +458,157 @@ pub async fn retry_scan_job(
     Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id: new_job_id })))
 }
 
+pub async fn list_task_jobs(
+    Query(query): Query<TaskJobsQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<PagedData<TaskJobData>>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(100).clamp(1, 500);
+    let offset = (page - 1) * page_size;
+    let job_type = query.job_type.unwrap_or_default().trim().to_string();
+    let status = query.status.unwrap_or_default().trim().to_string();
+
+    info!(page, page_size, job_type = %job_type, status = %status, "list_task_jobs requested");
+
+    let mut count_builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM task_jobs tj WHERE 1=1");
+    apply_task_job_filters(&mut count_builder, &job_type, &status);
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "list_task_jobs.count",
+                json!({"job_type": job_type, "status": status}),
+                err,
+            )
+        })?;
+
+    let mut list_builder = QueryBuilder::<Sqlite>::new(
+        "SELECT id, job_type, trigger_type, status, payload_json, checkpoint_json,
+                progress_done, progress_total, retry_count, max_retries, error_message,
+                run_after, started_at, finished_at, created_at, updated_at
+         FROM task_jobs tj
+         WHERE 1=1",
+    );
+    apply_task_job_filters(&mut list_builder, &job_type, &status);
+    list_builder
+        .push(" ORDER BY created_at DESC LIMIT ")
+        .push_bind(page_size)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let rows = list_builder
+        .build()
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "list_task_jobs.list",
+                json!({"page": page, "page_size": page_size}),
+                err,
+            )
+        })?;
+
+    let items = rows.into_iter().map(task_job_from_row).collect::<Vec<_>>();
+
+    Ok(Json(ApiResponse::ok(PagedData {
+        total,
+        page,
+        page_size,
+        items,
+    })))
+}
+
+pub async fn get_task_job(
+    Path(job_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<TaskJobData>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(job_id, "get_task_job requested");
+
+    let row = sqlx::query(
+        "SELECT id, job_type, trigger_type, status, payload_json, checkpoint_json,
+                progress_done, progress_total, retry_count, max_retries, error_message,
+                run_after, started_at, finished_at, created_at, updated_at
+         FROM task_jobs
+         WHERE id = ?",
+    )
+    .bind(&job_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("get_task_job.fetch", json!({"job_id": job_id}), err))?
+    .ok_or_else(|| bad_request("task job 不存在"))?;
+
+    Ok(Json(ApiResponse::ok(task_job_from_row(row))))
+}
+
+pub async fn cancel_task_job(
+    Path(job_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(job_id, "cancel_task_job requested");
+
+    let result = sqlx::query(
+        "UPDATE task_jobs
+         SET status = 'cancelled', error_message = COALESCE(error_message, 'cancelled by api'), finished_at = ?, updated_at = ?
+         WHERE id = ? AND status IN ('pending', 'running')",
+    )
+    .bind(Utc::now().to_rfc3339())
+    .bind(Utc::now().to_rfc3339())
+    .bind(&job_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("cancel_task_job.update", json!({"job_id": job_id}), err))?;
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult {
+        affected: result.rows_affected() as i64,
+    })))
+}
+
+pub async fn retry_task_job(
+    Path(job_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(job_id, "retry_task_job requested");
+
+    let row = sqlx::query("SELECT status, retry_count, max_retries FROM task_jobs WHERE id = ?")
+        .bind(&job_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|err| internal_db_error("retry_task_job.fetch", json!({"job_id": job_id}), err))?
+        .ok_or_else(|| bad_request("task job 不存在"))?;
+
+    let status: String = row.get("status");
+    let retry_count: i64 = row.get("retry_count");
+    let max_retries: i64 = row.get("max_retries");
+
+    if status != "failed" && status != "cancelled" {
+        return Err(bad_request("仅 failed/cancelled 任务支持重试"));
+    }
+    if retry_count >= max_retries {
+        return Err(bad_request("task 已达到最大重试次数"));
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        "UPDATE task_jobs
+         SET status = 'pending', retry_count = retry_count + 1,
+             error_message = NULL, started_at = NULL, finished_at = NULL,
+             run_after = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(&now)
+    .bind(&now)
+    .bind(&job_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("retry_task_job.update", json!({"job_id": job_id}), err))?;
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult {
+        affected: result.rows_affected() as i64,
+    })))
+}
+
 pub async fn search_photos(
     State(state): State<Arc<AppState>>,
     Json(req): Json<PhotoSearchRequest>,
@@ -607,6 +759,42 @@ fn apply_photo_search_filters(
     if !end_time.is_empty() {
         builder.push(" AND p.sort_time <= ");
         builder.push_bind(end_time.to_string());
+    }
+}
+
+fn apply_task_job_filters(
+    builder: &mut QueryBuilder<Sqlite>,
+    job_type: &str,
+    status: &str,
+) {
+    if !job_type.is_empty() {
+        builder.push(" AND tj.job_type = ");
+        builder.push_bind(job_type.to_string());
+    }
+    if !status.is_empty() {
+        builder.push(" AND tj.status = ");
+        builder.push_bind(status.to_string());
+    }
+}
+
+fn task_job_from_row(row: sqlx::sqlite::SqliteRow) -> TaskJobData {
+    TaskJobData {
+        id: row.get("id"),
+        job_type: row.get("job_type"),
+        trigger_type: row.get("trigger_type"),
+        status: row.get("status"),
+        payload_json: row.get("payload_json"),
+        checkpoint_json: row.get("checkpoint_json"),
+        progress_done: row.get("progress_done"),
+        progress_total: row.get("progress_total"),
+        retry_count: row.get("retry_count"),
+        max_retries: row.get("max_retries"),
+        error_message: row.get("error_message"),
+        run_after: row.get("run_after"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
     }
 }
 

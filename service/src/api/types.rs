@@ -123,3 +123,31 @@ pub struct AlbumDetailData {
 pub struct FsWatchScanTriggerRequest {
     pub changed_paths: Vec<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct TaskJobsQuery {
+    pub job_type: Option<String>,
+    pub status: Option<String>,
+    pub page: Option<i64>,
+    pub page_size: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskJobData {
+    pub id: String,
+    pub job_type: String,
+    pub trigger_type: String,
+    pub status: String,
+    pub payload_json: Option<String>,
+    pub checkpoint_json: Option<String>,
+    pub progress_done: i64,
+    pub progress_total: Option<i64>,
+    pub retry_count: i64,
+    pub max_retries: i64,
+    pub error_message: Option<String>,
+    pub run_after: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
