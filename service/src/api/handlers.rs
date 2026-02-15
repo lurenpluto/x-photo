@@ -1923,6 +1923,45 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
     .map_err(|e| format!("failed to set task {} running: {}", task_job_id, e))?;
 
     if transitioned.rows_affected() == 0 {
+        for _ in 0..20 {
+            let latest = sqlx::query(
+                "SELECT status, scan_job_id, checkpoint_json
+                 FROM task_jobs
+                 WHERE id = ?",
+            )
+            .bind(task_job_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| format!("failed to re-fetch task {} after race: {}", task_job_id, e))?;
+
+            let Some(latest) = latest else {
+                return Err(format!("task {} disappeared during execution race", task_job_id));
+            };
+
+            let latest_status: String = latest.get("status");
+            let latest_scan_job_id: Option<String> = latest.get("scan_job_id");
+            if let Some(scan_job_id) = latest_scan_job_id {
+                return Ok(scan_job_id);
+            }
+
+            let checkpoint_json: Option<String> = latest.get("checkpoint_json");
+            if let Some(checkpoint_json) = checkpoint_json {
+                let parsed: Value = serde_json::from_str(&checkpoint_json).unwrap_or_else(|_| json!({}));
+                if let Some(scan_job_id) = parsed.get("scan_job_id").and_then(|v| v.as_str()) {
+                    return Ok(scan_job_id.to_string());
+                }
+            }
+
+            if latest_status == STATUS_FAILED || latest_status == STATUS_CANCELLED {
+                return Err(format!(
+                    "task {} moved to terminal status {} without scan job id",
+                    task_job_id, latest_status
+                ));
+            }
+
+            sleep(Duration::from_millis(25)).await;
+        }
+
         return Err(format!("task {} status changed by other worker", task_job_id));
     }
 
