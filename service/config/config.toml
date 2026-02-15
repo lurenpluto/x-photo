@@ -11,6 +11,9 @@ level = "info"
 [storage]
 allow_delete = false
 
+[scan]
+max_concurrent_jobs = 2
+
 [album_rules]
 enabled = true
 date_delimiters = [".", "_", "-"]

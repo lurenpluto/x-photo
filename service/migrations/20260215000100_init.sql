@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS photo_albums (
 CREATE TABLE IF NOT EXISTS scan_jobs (
   id TEXT PRIMARY KEY,
   source_id TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
+  cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1)),
   started_at TEXT,
   finished_at TEXT,
   total_count INTEGER,
@@ -77,7 +78,7 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
 
 CREATE TABLE IF NOT EXISTS source_scan_states (
   source_id TEXT PRIMARY KEY,
-  status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'success', 'failed')),
+  status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'success', 'failed', 'cancelled')),
   last_scan_started_at TEXT,
   last_scan_finished_at TEXT,
   last_scanned_path TEXT,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{routing::get, routing::patch, routing::post, Router};
 use sqlx::SqlitePool;
+use tokio::sync::Semaphore;
 
 use crate::config::AppConfig;
 
@@ -12,16 +13,24 @@ mod types;
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: AppConfig,
+    pub scan_limiter: Arc<Semaphore>,
 }
 
 pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
-    let state = Arc::new(AppState { pool, config });
+    let limiter_size = config.scan.max_concurrent_jobs.max(1);
+    let state = Arc::new(AppState {
+        pool,
+        config,
+        scan_limiter: Arc::new(Semaphore::new(limiter_size)),
+    });
 
     Router::new()
         .route("/rpc/v1/health", get(handlers::health))
         .route("/rpc/v1/sources", get(handlers::list_sources).post(handlers::create_source))
         .route("/rpc/v1/sources/{source_id}/scan", post(handlers::trigger_source_scan))
         .route("/rpc/v1/scan-jobs/{job_id}", get(handlers::get_scan_job))
+        .route("/rpc/v1/scan-jobs/{job_id}/cancel", post(handlers::cancel_scan_job))
+        .route("/rpc/v1/scan-jobs/{job_id}/retry", post(handlers::retry_scan_job))
         .route("/rpc/v1/photos/search", post(handlers::search_photos))
         .route("/rpc/v1/photos/{photo_id}", get(handlers::get_photo_detail))
         .route("/rpc/v1/photos/{photo_id}/remark", patch(handlers::update_photo_remark))

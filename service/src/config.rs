@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
     pub storage: StorageConfig,
+    pub scan: ScanConfig,
     pub album_rules: AlbumRulesConfig,
 }
 
@@ -35,6 +36,12 @@ pub struct LoggingConfig {
 #[serde(default)]
 pub struct StorageConfig {
     pub allow_delete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ScanConfig {
+    pub max_concurrent_jobs: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +77,9 @@ impl Default for AppConfig {
             },
             storage: StorageConfig {
                 allow_delete: false,
+            },
+            scan: ScanConfig {
+                max_concurrent_jobs: 2,
             },
             album_rules: AlbumRulesConfig {
                 enabled: true,
@@ -121,6 +131,14 @@ impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             allow_delete: false,
+        }
+    }
+}
+
+impl Default for ScanConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_jobs: 2,
         }
     }
 }
