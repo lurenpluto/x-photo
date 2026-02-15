@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path as StdPath;
 
 use axum::{extract::Path, extract::State, http::StatusCode, Json};
@@ -11,6 +12,7 @@ use crate::api::types::{
     ApiResponse, CreateAlbumRequest, CreateSourceRequest, PagedData, PhotoSearchRequest,
     ScanTriggerResponse,
 };
+use crate::domain::album_rules::parse_album_from_dir_name;
 use crate::domain::models::{build_album_id, build_photo_id, Album, Photo, Source};
 use crate::infra::storage::local_fs::LocalFsAdapter;
 use crate::infra::storage::StorageAdapter;
@@ -552,6 +554,8 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
             let mut skipped_count: i64 = 0;
             let mut failed_count: i64 = result.failed_count;
             let now = Utc::now().to_rfc3339();
+            let mut auto_album_link_count: i64 = 0;
+            let mut album_cache: HashMap<String, String> = HashMap::new();
             let mut last_scanned_path: Option<String> = None;
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
@@ -648,6 +652,33 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                         error = %e,
                         "photo upsert failed"
                     );
+                    continue;
+                }
+
+                match ensure_album_by_dir_rule(
+                    &pool,
+                    &source.id,
+                    &candidate.file_path,
+                    &photo_id,
+                    &mut album_cache,
+                )
+                .await
+                {
+                    Ok(linked) => {
+                        if linked {
+                            auto_album_link_count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        failed_count += 1;
+                        error!(
+                            job_id,
+                            source_id = source.id,
+                            file_path = candidate.file_path,
+                            error = %e,
+                            "auto album linking failed"
+                        );
+                    }
                 }
             }
 
@@ -700,6 +731,7 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                 new_count,
                 updated_count,
                 skipped_count,
+                auto_album_link_count,
                 failed_count,
                 "scan job status transition"
             );
@@ -847,6 +879,120 @@ fn parse_exif_datetime_to_rfc3339(value: &str) -> Option<String> {
     let normalized = value.trim();
     let parsed = NaiveDateTime::parse_from_str(normalized, "%Y:%m:%d %H:%M:%S").ok()?;
     Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc).to_rfc3339())
+}
+
+async fn ensure_album_by_dir_rule(
+    pool: &SqlitePool,
+    source_id: &str,
+    file_path: &str,
+    photo_id: &str,
+    cache: &mut HashMap<String, String>,
+) -> Result<bool, String> {
+    let path = StdPath::new(file_path);
+    let dir_name = match path
+        .parent()
+        .and_then(|v| v.file_name())
+        .map(|v| v.to_string_lossy().to_string())
+    {
+        Some(v) => v,
+        None => return Ok(false),
+    };
+
+    let matched = match parse_album_from_dir_name(&dir_name) {
+        Some(v) => v,
+        None => return Ok(false),
+    };
+
+    let cache_key = format!(
+        "{}|{}|{}|{}",
+        source_id, matched.rule_name, matched.album_date, matched.album_name
+    );
+
+    let album_id = if let Some(v) = cache.get(&cache_key) {
+        v.clone()
+    } else {
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM albums WHERE auto_created = 1 AND rule_key = ? AND album_date = ? AND name = ? LIMIT 1",
+        )
+        .bind(&matched.rule_name)
+        .bind(&matched.album_date)
+        .bind(&matched.album_name)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to lookup auto album (rule={}, date={}, name={}): {}",
+                matched.rule_name, matched.album_date, matched.album_name, e
+            )
+        })?;
+
+        let album_id = match existing {
+            Some(id) => id,
+            None => {
+                let now = Utc::now().to_rfc3339();
+                let stable_salt = sha256_hex(&format!("{}:{}", source_id, matched.rule_name));
+                let id = build_album_id(
+                    &matched.album_name,
+                    Some(matched.album_date.as_str()),
+                    &stable_salt,
+                );
+                sqlx::query(
+                    "INSERT INTO albums (id, name, remark, cover_photo_id, auto_created, album_date, rule_key, created_at, updated_at)
+                     VALUES (?, ?, NULL, NULL, 1, ?, ?, ?, ?)
+                     ON CONFLICT(id) DO UPDATE SET
+                        name = excluded.name,
+                        album_date = excluded.album_date,
+                        rule_key = excluded.rule_key,
+                        updated_at = excluded.updated_at",
+                )
+                .bind(&id)
+                .bind(&matched.album_name)
+                .bind(&matched.album_date)
+                .bind(&matched.rule_name)
+                .bind(&now)
+                .bind(&now)
+                .execute(pool)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "failed to create auto album (rule={}, date={}, name={}): {}",
+                        matched.rule_name, matched.album_date, matched.album_name, e
+                    )
+                })?;
+
+                info!(
+                    album_id = id,
+                    rule = matched.rule_name,
+                    album_date = matched.album_date,
+                    album_name = matched.album_name,
+                    "auto album created"
+                );
+                id
+            }
+        };
+
+        cache.insert(cache_key, album_id.clone());
+        album_id
+    };
+
+    sqlx::query(
+        "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
+         VALUES (?, ?, NULL, ?)
+         ON CONFLICT(photo_id, album_id) DO NOTHING",
+    )
+    .bind(photo_id)
+    .bind(&album_id)
+    .bind(Utc::now().to_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        format!(
+            "failed to link photo to auto album (photo_id={}, album_id={}): {}",
+            photo_id, album_id, e
+        )
+    })?;
+
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
