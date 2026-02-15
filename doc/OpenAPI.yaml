@@ -1,14 +1,177 @@
 openapi: 3.0.3
 info:
   title: XPhoto Service API
-  version: 1.0.0-draft
-  description: 正式化草案（持续补全）
+  version: 1.0.0
+  description: 后端联调契约（V1）
 servers:
   - url: /rpc/v1
+
 paths:
+  /health:
+    get:
+      summary: 健康检查
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /sources:
+    get:
+      summary: 数据源列表
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+    post:
+      summary: 创建数据源
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSourceRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /sources/{source_id}/scan:
+    post:
+      summary: 手动触发扫描
+      parameters:
+        - $ref: '#/components/parameters/source_id'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanTriggerResponse'
+
+  /sources/{source_id}/scan:fs-watch:
+    post:
+      summary: 文件变更触发扫描
+      parameters:
+        - $ref: '#/components/parameters/source_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FsWatchScanTriggerRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanTriggerResponse'
+
+  /scan-jobs/{job_id}:
+    get:
+      summary: 扫描任务详情
+      parameters:
+        - $ref: '#/components/parameters/job_id'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /scan-jobs/{job_id}/cancel:
+    post:
+      summary: 取消扫描任务
+      parameters:
+        - $ref: '#/components/parameters/job_id'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /scan-jobs/{job_id}/retry:
+    post:
+      summary: 重试扫描任务
+      parameters:
+        - $ref: '#/components/parameters/job_id'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanTriggerResponse'
+
+  /task-jobs:
+    get:
+      summary: 任务分页列表
+      parameters:
+        - in: query
+          name: job_type
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: page_size
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /task-jobs/active:
+    get:
+      summary: 当前活跃任务
+      parameters:
+        - in: query
+          name: include_all_daemon
+          schema: { type: boolean }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /task-jobs/health:
+    get:
+      summary: 永续任务健康状态
+      parameters:
+        - in: query
+          name: stale_after_seconds
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskHealthResponse'
+
   /task-jobs/overview:
     get:
-      summary: 任务总览
+      summary: 任务总览（active+health）
       parameters:
         - in: query
           name: include_all_daemon
@@ -23,26 +186,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskOverviewResponse'
-  /task-jobs/active:
+
+  /task-jobs/{job_id}:
     get:
-      summary: 当前活跃任务
+      summary: 任务详情
       parameters:
-        - in: query
-          name: include_all_daemon
-          schema: { type: boolean }
+        - $ref: '#/components/parameters/job_id'
       responses:
         '200':
           description: ok
-  /task-jobs/health:
-    get:
-      summary: 永续任务健康状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /task-jobs/{job_id}/cancel:
+    post:
+      summary: 取消任务
       parameters:
-        - in: query
-          name: stale_after_seconds
-          schema: { type: integer, minimum: 1 }
+        - $ref: '#/components/parameters/job_id'
       responses:
         '200':
           description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /task-jobs/{job_id}/retry:
+    post:
+      summary: 重试任务
+      parameters:
+        - $ref: '#/components/parameters/job_id'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
   /photos/search:
     post:
       summary: 照片检索
@@ -55,15 +238,268 @@ paths:
       responses:
         '200':
           description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /photos/{photo_id}:
+    get:
+      summary: 照片详情
+      parameters:
+        - $ref: '#/components/parameters/photo_id'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /photos/{photo_id}/remark:
+    patch:
+      summary: 更新照片备注
+      parameters:
+        - $ref: '#/components/parameters/photo_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePhotoRemarkRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /photos/batch/delete:
+    post:
+      summary: 批量删除照片
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDeletePhotosRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /photos/batch/add-to-album:
+    post:
+      summary: 批量加入相册
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchAddToAlbumRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /albums:
+    get:
+      summary: 相册列表
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+    post:
+      summary: 创建相册
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAlbumRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+
+  /albums/{album_id}:
+    get:
+      summary: 相册详情（含分页照片）
+      parameters:
+        - $ref: '#/components/parameters/album_id'
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: page_size
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseAny'
+    patch:
+      summary: 更新相册
+      parameters:
+        - $ref: '#/components/parameters/album_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAlbumRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /albums/{album_id}/cover:
+    patch:
+      summary: 设置相册封面
+      parameters:
+        - $ref: '#/components/parameters/album_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAlbumCoverRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /albums/{album_id}/photos:add:
+    post:
+      summary: 相册添加照片
+      parameters:
+        - $ref: '#/components/parameters/album_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlbumPhotosRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /albums/{album_id}/photos:remove:
+    post:
+      summary: 相册移除照片
+      parameters:
+        - $ref: '#/components/parameters/album_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlbumPhotosRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
 components:
+  parameters:
+    source_id:
+      in: path
+      name: source_id
+      required: true
+      schema: { type: string }
+    job_id:
+      in: path
+      name: job_id
+      required: true
+      schema: { type: string }
+    photo_id:
+      in: path
+      name: photo_id
+      required: true
+      schema: { type: string }
+    album_id:
+      in: path
+      name: album_id
+      required: true
+      schema: { type: string }
+
   schemas:
-    ApiResponse:
+    ApiResponseAny:
       type: object
       properties:
         code: { type: integer }
         message: { type: string }
         data: {}
       required: [code, message, data]
+
+    ScanTriggerResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data:
+          type: object
+          properties:
+            job_id: { type: string }
+          required: [job_id]
+      required: [code, message, data]
+
+    BatchResultResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data:
+          type: object
+          properties:
+            affected: { type: integer }
+          required: [affected]
+      required: [code, message, data]
+
+    CreateSourceRequest:
+      type: object
+      required: [name, root_path]
+      properties:
+        name: { type: string }
+        root_path: { type: string }
+        source_type: { type: string }
+
+    FsWatchScanTriggerRequest:
+      type: object
+      required: [changed_paths]
+      properties:
+        changed_paths:
+          type: array
+          items: { type: string }
+
     PhotoSearchRequest:
       type: object
       properties:
@@ -75,6 +511,61 @@ components:
         order: { type: string, enum: [asc, desc] }
         page: { type: integer, minimum: 1 }
         page_size: { type: integer, minimum: 1 }
+
+    UpdatePhotoRemarkRequest:
+      type: object
+      properties:
+        remark:
+          type: string
+          nullable: true
+
+    BatchDeletePhotosRequest:
+      type: object
+      required: [photo_ids]
+      properties:
+        photo_ids:
+          type: array
+          items: { type: string }
+
+    BatchAddToAlbumRequest:
+      type: object
+      required: [album_id, photo_ids]
+      properties:
+        album_id: { type: string }
+        photo_ids:
+          type: array
+          items: { type: string }
+
+    CreateAlbumRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        remark: { type: string, nullable: true }
+        auto_created: { type: boolean }
+        album_date: { type: string, nullable: true }
+        rule_key: { type: string, nullable: true }
+
+    UpdateAlbumRequest:
+      type: object
+      properties:
+        name: { type: string, nullable: true }
+        remark: { type: string, nullable: true }
+
+    SetAlbumCoverRequest:
+      type: object
+      required: [cover_photo_id]
+      properties:
+        cover_photo_id: { type: string }
+
+    AlbumPhotosRequest:
+      type: object
+      required: [photo_ids]
+      properties:
+        photo_ids:
+          type: array
+          items: { type: string }
+
     TaskJobData:
       type: object
       properties:
@@ -88,7 +579,15 @@ components:
         progress_done: { type: integer }
         progress_total: { type: integer, nullable: true }
         progress_percent: { type: number, nullable: true }
-      required: [id, job_type, trigger_type, status, is_daemon, is_active, progress_done]
+      required:
+        - id
+        - job_type
+        - trigger_type
+        - status
+        - is_daemon
+        - is_active
+        - progress_done
+
     DaemonTaskHealthItem:
       type: object
       properties:
@@ -98,6 +597,7 @@ components:
         heartbeat_at: { type: string, nullable: true }
         healthy: { type: boolean }
       required: [id, task_type, status, healthy]
+
     TaskHealthData:
       type: object
       properties:
@@ -108,6 +608,16 @@ components:
           items:
             $ref: '#/components/schemas/DaemonTaskHealthItem'
       required: [healthy, stale_after_seconds, daemon_tasks]
+
+    TaskHealthResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data:
+          $ref: '#/components/schemas/TaskHealthData'
+      required: [code, message, data]
+
     TaskOverviewData:
       type: object
       properties:
@@ -118,10 +628,12 @@ components:
         health:
           $ref: '#/components/schemas/TaskHealthData'
       required: [active_tasks, health]
+
     TaskOverviewResponse:
-      allOf:
-        - $ref: '#/components/schemas/ApiResponse'
-        - type: object
-          properties:
-            data:
-              $ref: '#/components/schemas/TaskOverviewData'
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data:
+          $ref: '#/components/schemas/TaskOverviewData'
+      required: [code, message, data]
