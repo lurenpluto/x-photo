@@ -562,6 +562,95 @@ pub async fn cancel_task_job(
 ) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!(job_id, "cancel_task_job requested");
 
+    let task_row = sqlx::query("SELECT status, scan_job_id FROM task_jobs WHERE id = ?")
+        .bind(&job_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|err| internal_db_error("cancel_task_job.fetch", json!({"job_id": job_id}), err))?
+        .ok_or_else(|| bad_request("task job 不存在"))?;
+
+    let task_status: String = task_row.get("status");
+    if task_status != "pending" && task_status != "running" {
+        return Ok(Json(ApiResponse::ok(BatchOperationResult { affected: 0 })));
+    }
+
+    let linked_scan_job_id: Option<String> = task_row.get("scan_job_id");
+    if let Some(scan_job_id) = linked_scan_job_id {
+        let scan_row = sqlx::query("SELECT source_id, status FROM scan_jobs WHERE id = ?")
+            .bind(&scan_job_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|err| {
+                internal_db_error(
+                    "cancel_task_job.fetch_scan",
+                    json!({"job_id": job_id, "scan_job_id": scan_job_id}),
+                    err,
+                )
+            })?;
+
+        if let Some(scan_row) = scan_row {
+            let source_id: String = scan_row.get("source_id");
+            let scan_status: String = scan_row.get("status");
+            let now = Utc::now().to_rfc3339();
+
+            if scan_status == "pending" {
+                sqlx::query(
+                    "UPDATE scan_jobs
+                     SET status = 'cancelled', cancel_requested = 1, finished_at = ?, error_message = ?
+                     WHERE id = ?",
+                )
+                .bind(&now)
+                .bind("cancelled by task api")
+                .bind(&scan_job_id)
+                .execute(&state.pool)
+                .await
+                .map_err(|err| {
+                    internal_db_error(
+                        "cancel_task_job.cancel_scan_pending",
+                        json!({"job_id": job_id, "scan_job_id": scan_job_id}),
+                        err,
+                    )
+                })?;
+
+                upsert_source_scan_state(
+                    &state.pool,
+                    &source_id,
+                    "cancelled",
+                    None,
+                    Some(&now),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("cancelled by task api"),
+                )
+                .await
+                .map_err(|msg| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse {
+                            code: 500,
+                            message: msg,
+                            data: json!({}),
+                        }),
+                    )
+                })?;
+            } else if scan_status == "running" {
+                sqlx::query("UPDATE scan_jobs SET cancel_requested = 1 WHERE id = ?")
+                    .bind(&scan_job_id)
+                    .execute(&state.pool)
+                    .await
+                    .map_err(|err| {
+                        internal_db_error(
+                            "cancel_task_job.request_scan_running",
+                            json!({"job_id": job_id, "scan_job_id": scan_job_id}),
+                            err,
+                        )
+                    })?;
+            }
+        }
+    }
+
     let result = sqlx::query(
         "UPDATE task_jobs
          SET status = 'cancelled', error_message = COALESCE(error_message, 'cancelled by api'), finished_at = ?, updated_at = ?
