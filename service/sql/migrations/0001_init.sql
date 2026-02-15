@@ -64,8 +64,11 @@ CREATE TABLE IF NOT EXISTS photo_albums (
 CREATE TABLE IF NOT EXISTS scan_jobs (
   id TEXT PRIMARY KEY,
   source_id TEXT NOT NULL,
+  trigger_type TEXT NOT NULL DEFAULT 'manual',
   status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
   cancel_requested INTEGER NOT NULL DEFAULT 0 CHECK (cancel_requested IN (0, 1)),
+  processed_count INTEGER NOT NULL DEFAULT 0,
+  resume_cursor_path TEXT,
   started_at TEXT,
   finished_at TEXT,
   total_count INTEGER,
@@ -74,6 +77,25 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
   failed_count INTEGER,
   error_message TEXT,
   FOREIGN KEY (source_id) REFERENCES sources (id)
+);
+
+CREATE TABLE IF NOT EXISTS task_jobs (
+  id TEXT PRIMARY KEY,
+  job_type TEXT NOT NULL,
+  trigger_type TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
+  payload_json TEXT,
+  checkpoint_json TEXT,
+  progress_done INTEGER NOT NULL DEFAULT 0,
+  progress_total INTEGER,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  run_after TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS source_scan_states (
@@ -105,3 +127,5 @@ CREATE INDEX IF NOT EXISTS idx_photos_source_path ON photos (source_id, file_pat
 CREATE INDEX IF NOT EXISTS idx_photo_albums_album ON photo_albums (album_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_source_scan_states_status ON source_scan_states (status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_jobs_status_run_after ON task_jobs (status, run_after);
+CREATE INDEX IF NOT EXISTS idx_task_jobs_type_status ON task_jobs (job_type, status, created_at DESC);

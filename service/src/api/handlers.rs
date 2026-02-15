@@ -151,7 +151,7 @@ pub async fn trigger_source_scan(
         return Err(bad_request("当前 source 已有扫描任务在执行或排队"));
     }
 
-    let job_id = enqueue_scan_job(state.clone(), source)
+    let job_id = enqueue_scan_job(state.clone(), source, "manual")
         .await
         .map_err(|msg| {
             (
@@ -174,7 +174,7 @@ pub async fn get_scan_job(
     info!(job_id, "get_scan_job requested");
 
     let row = sqlx::query(
-        "SELECT id, source_id, status, cancel_requested, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message
+        "SELECT id, source_id, trigger_type, status, cancel_requested, processed_count, resume_cursor_path, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message
          FROM scan_jobs
          WHERE id = ?",
     )
@@ -187,8 +187,11 @@ pub async fn get_scan_job(
     let data = json!({
         "id": row.get::<String, _>("id"),
         "source_id": row.get::<String, _>("source_id"),
+        "trigger_type": row.get::<String, _>("trigger_type"),
         "status": row.get::<String, _>("status"),
         "cancel_requested": row.get::<i64, _>("cancel_requested") == 1,
+        "processed_count": row.get::<i64, _>("processed_count"),
+        "resume_cursor_path": row.get::<Option<String>, _>("resume_cursor_path"),
         "started_at": row.get::<Option<String>, _>("started_at"),
         "finished_at": row.get::<Option<String>, _>("finished_at"),
         "total_count": row.get::<Option<i64>, _>("total_count"),
@@ -327,7 +330,7 @@ pub async fn retry_scan_job(
         return Err(bad_request("当前 source 已有扫描任务在执行或排队"));
     }
 
-    let new_job_id = enqueue_scan_job(state.clone(), source)
+    let new_job_id = enqueue_scan_job(state.clone(), source, "retry")
         .await
         .map_err(|msg| {
             (
@@ -1009,30 +1012,37 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
     )
 }
 
-async fn enqueue_scan_job(state: Arc<AppState>, source: Source) -> Result<String, String> {
+async fn enqueue_scan_job(
+    state: Arc<AppState>,
+    source: Source,
+    trigger_type: &str,
+) -> Result<String, String> {
     let now = Utc::now().to_rfc3339();
     let job_id = sha256_hex(&format!("{}:{}", source.id, now));
 
     sqlx::query(
-        "INSERT INTO scan_jobs (id, source_id, status, cancel_requested, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message)
-         VALUES (?, ?, 'pending', 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
+        "INSERT INTO scan_jobs (id, source_id, trigger_type, status, cancel_requested, processed_count, resume_cursor_path, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message)
+         VALUES (?, ?, ?, 'pending', 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
     )
     .bind(&job_id)
     .bind(&source.id)
+    .bind(trigger_type)
     .execute(&state.pool)
     .await
     .map_err(|e| {
         format!(
-            "failed to create scan job (job_id={}, source_id={}): {}",
-            job_id, source.id, e
+            "failed to create scan job (job_id={}, source_id={}, trigger_type={}): {}",
+            job_id, source.id, trigger_type, e
         )
     })?;
 
-    info!(job_id, source_id = source.id, from = "none", to = "pending", "scan job status transition");
+    info!(job_id, source_id = source.id, trigger_type, from = "none", to = "pending", "scan job status transition");
 
     let pool_for_task = state.pool.clone();
     let limiter = state.scan_limiter.clone();
     let job_id_for_task = job_id.clone();
+    let checkpoint_every = state.config.scan.checkpoint_every.max(1);
+    let resume_enabled = state.config.scan.resume_enabled;
     let album_rule_patterns = if state.config.album_rules.enabled {
         build_album_rule_patterns(&state.config)
     } else {
@@ -1052,6 +1062,8 @@ async fn enqueue_scan_job(state: Arc<AppState>, source: Source) -> Result<String
             job_id_for_task.clone(),
             source,
             album_rule_patterns,
+            checkpoint_every,
+            resume_enabled,
         )
         .await
         {
@@ -1071,11 +1083,38 @@ async fn is_cancel_requested(pool: &SqlitePool, job_id: &str) -> Result<bool, St
     Ok(flag.unwrap_or(0) == 1)
 }
 
+async fn update_scan_checkpoint(
+    pool: &SqlitePool,
+    job_id: &str,
+    processed_count: i64,
+    resume_cursor_path: Option<&str>,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE scan_jobs
+         SET processed_count = ?, resume_cursor_path = ?
+         WHERE id = ?",
+    )
+    .bind(processed_count)
+    .bind(resume_cursor_path)
+    .bind(job_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        format!(
+            "failed to update scan checkpoint (job_id={}, processed_count={}): {}",
+            job_id, processed_count, e
+        )
+    })?;
+    Ok(())
+}
+
 async fn run_scan_job(
     pool: SqlitePool,
     job_id: String,
     source: Source,
     album_rule_patterns: Vec<AlbumRulePattern>,
+    checkpoint_every: usize,
+    resume_enabled: bool,
 ) -> Result<(), String> {
     let current_status: Option<String> = sqlx::query_scalar("SELECT status FROM scan_jobs WHERE id = ?")
         .bind(&job_id)
@@ -1126,20 +1165,39 @@ async fn run_scan_job(
 
     info!(job_id, source_id = source.id, from = "pending", to = "running", "scan job status transition");
 
+    let resume_cursor_path: Option<String> = if resume_enabled {
+        sqlx::query_scalar("SELECT last_scanned_path FROM source_scan_states WHERE source_id = ?")
+            .bind(&source.id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to load resume cursor for source {} in job {}: {}",
+                    source.id, job_id, e
+                )
+            })?
+            .flatten()
+    } else {
+        None
+    };
+
     let source_root = source.root_path.clone();
+    let resume_cursor_for_collect = resume_cursor_path.clone();
     let collect_result = tokio::task::spawn_blocking(move || {
         let adapter = LocalFsAdapter::new(false);
-        let entries = adapter.list_entries(&source_root).map_err(|e| {
+        let mut entries = adapter.list_entries(&source_root).map_err(|e| {
             format!(
                 "failed to list source entries at {}: {}",
                 source_root,
                 e
             )
         })?;
+        entries.sort_by_key(|e| e.path.to_string_lossy().to_string());
 
         let mut candidates: Vec<ScannedPhotoCandidate> = Vec::new();
         let mut failed_count: i64 = 0;
         let mut first_error: Option<String> = None;
+        let mut resume_reached = resume_cursor_for_collect.is_none();
 
         for entry in entries {
             if entry.is_dir || !is_photo_path(&entry.path) {
@@ -1147,6 +1205,14 @@ async fn run_scan_job(
             }
 
             let file_path = entry.path.to_string_lossy().to_string();
+
+            if !resume_reached {
+                if Some(file_path.clone()) == resume_cursor_for_collect {
+                    resume_reached = true;
+                }
+                continue;
+            }
+
             let file_name = entry
                 .path
                 .file_name()
@@ -1237,6 +1303,7 @@ async fn run_scan_job(
             let mut updated_count: i64 = 0;
             let mut skipped_count: i64 = 0;
             let mut failed_count: i64 = result.failed_count;
+            let mut processed_count: i64 = 0;
             let now = Utc::now().to_rfc3339();
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
@@ -1249,10 +1316,12 @@ async fn run_scan_job(
                 let finished_at = Utc::now().to_rfc3339();
                 sqlx::query(
                     "UPDATE scan_jobs
-                     SET status = 'cancelled', finished_at = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
+                     SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
                      WHERE id = ?",
                 )
                 .bind(&finished_at)
+                .bind(processed_count)
+                .bind(last_scanned_path.as_deref())
                 .bind(result.candidates.len() as i64)
                 .bind(new_count)
                 .bind(updated_count)
@@ -1291,10 +1360,12 @@ async fn run_scan_job(
                     let finished_at = Utc::now().to_rfc3339();
                     sqlx::query(
                         "UPDATE scan_jobs
-                         SET status = 'cancelled', finished_at = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
+                         SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
                          WHERE id = ?",
                     )
                     .bind(&finished_at)
+                    .bind(processed_count)
+                    .bind(last_scanned_path.as_deref())
                     .bind(result.candidates.len() as i64)
                     .bind(new_count)
                     .bind(updated_count)
@@ -1328,10 +1399,21 @@ async fn run_scan_job(
                     return Ok(());
                 }
 
+                processed_count += 1;
                 last_scanned_path = Some(candidate.file_path.clone());
                 last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
                 last_scanned_modified_at = candidate.modified_at_fs.clone();
                 last_scanned_content_hash = Some(candidate.content_hash.clone());
+
+                if processed_count % (checkpoint_every as i64) == 0 {
+                    update_scan_checkpoint(
+                        &pool,
+                        &job_id,
+                        processed_count,
+                        last_scanned_path.as_deref(),
+                    )
+                    .await?;
+                }
 
                 let existing = sqlx::query(
                     "SELECT id, modified_at_fs, content_hash FROM photos WHERE source_id = ? AND storage_file_id = ?",
@@ -1468,10 +1550,12 @@ async fn run_scan_job(
 
             sqlx::query(
                 "UPDATE scan_jobs
-                 SET status = 'success', finished_at = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
+                 SET status = 'success', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
                  WHERE id = ?",
             )
             .bind(&finished_at)
+            .bind(processed_count)
+            .bind(last_scanned_path.as_deref())
             .bind(total_count)
             .bind(new_count)
             .bind(updated_count)
@@ -1523,10 +1607,12 @@ async fn run_scan_job(
 
             sqlx::query(
                 "UPDATE scan_jobs
-                 SET status = 'failed', finished_at = ?, failed_count = 1, error_message = ?
+                 SET status = 'failed', finished_at = ?, processed_count = ?, resume_cursor_path = ?, failed_count = 1, error_message = ?
                  WHERE id = ?",
             )
             .bind(&finished_at)
+            .bind(0_i64)
+            .bind(Option::<&str>::None)
             .bind(&scan_error)
             .bind(&job_id)
             .execute(&pool)

@@ -29,6 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log_level = %cfg.logging.level,
         storage_allow_delete = cfg.storage.allow_delete,
         scan_max_concurrent_jobs = cfg.scan.max_concurrent_jobs,
+        scan_checkpoint_every = cfg.scan.checkpoint_every,
+        scan_resume_enabled = cfg.scan.resume_enabled,
         args = ?cmd_args,
         "bootstrapping service with runtime inputs"
     );

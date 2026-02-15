@@ -13,6 +13,8 @@ allow_delete = false
 
 [scan]
 max_concurrent_jobs = 2
+checkpoint_every = 50
+resume_enabled = true
 
 [album_rules]
 enabled = true

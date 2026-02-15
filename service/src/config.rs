@@ -42,6 +42,8 @@ pub struct StorageConfig {
 #[serde(default)]
 pub struct ScanConfig {
     pub max_concurrent_jobs: usize,
+    pub checkpoint_every: usize,
+    pub resume_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +82,8 @@ impl Default for AppConfig {
             },
             scan: ScanConfig {
                 max_concurrent_jobs: 2,
+                checkpoint_every: 50,
+                resume_enabled: true,
             },
             album_rules: AlbumRulesConfig {
                 enabled: true,
@@ -139,6 +143,8 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             max_concurrent_jobs: 2,
+            checkpoint_every: 50,
+            resume_enabled: true,
         }
     }
 }
