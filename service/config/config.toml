@@ -1,0 +1,12 @@
+[server]
+bind_addr = "0.0.0.0:8080"
+
+[database]
+url = "sqlite://xphoto.db"
+
+[logging]
+dir = "logs"
+level = "info"
+
+[storage]
+allow_delete = false

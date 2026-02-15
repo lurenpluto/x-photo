@@ -1,4 +1,5 @@
 mod api;
+mod config;
 mod db;
 mod domain;
 mod infra;
@@ -12,15 +13,21 @@ use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _log_guard = logging::init_logging("xphoto-service")?;
+    let loaded = config::load()?;
+    let cfg = loaded.config;
+    let _log_guard = logging::init_logging("xphoto-service", &cfg.logging.dir, &cfg.logging.level)?;
 
-    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://xphoto.db".to_string());
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
+    let database_url = cfg.database.url;
+    let bind_addr = cfg.server.bind_addr;
     let cmd_args: Vec<String> = std::env::args().collect();
 
     info!(
-        database_url,
-        bind_addr,
+        config_path = %loaded.path,
+        database_url = %database_url,
+        bind_addr = %bind_addr,
+        log_dir = %cfg.logging.dir,
+        log_level = %cfg.logging.level,
+        storage_allow_delete = cfg.storage.allow_delete,
         args = ?cmd_args,
         "bootstrapping service with runtime inputs"
     );

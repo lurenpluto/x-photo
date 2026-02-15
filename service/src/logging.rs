@@ -6,9 +6,12 @@ use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::EnvFilter;
 
-pub fn init_logging(service_name: &str) -> Result<WorkerGuard, Box<dyn std::error::Error>> {
-    let log_dir = std::env::var("LOG_DIR").unwrap_or_else(|_| "logs".to_string());
-    let log_dir_path = PathBuf::from(&log_dir);
+pub fn init_logging(
+    service_name: &str,
+    log_dir: &str,
+    log_level: &str,
+) -> Result<WorkerGuard, Box<dyn std::error::Error>> {
+    let log_dir_path = PathBuf::from(log_dir);
 
     std::fs::create_dir_all(&log_dir_path).map_err(|e| {
         let msg = format!(
@@ -36,7 +39,8 @@ pub fn init_logging(service_name: &str) -> Result<WorkerGuard, Box<dyn std::erro
         })?;
 
     let (non_blocking, guard) = tracing_appender::non_blocking(log_file);
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
