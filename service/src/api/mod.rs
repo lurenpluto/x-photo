@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use axum::{routing::get, routing::patch, routing::post, Router};
+use tower_http::cors::{Any, CorsLayer};
 use sqlx::SqlitePool;
 use tokio::sync::Semaphore;
 
@@ -25,6 +26,11 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
     });
 
     handlers::start_task_dispatcher(state.clone());
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     Router::new()
         .route("/rpc/v1/health", get(handlers::health))
@@ -52,4 +58,5 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .route("/rpc/v1/albums/{album_id}/photos:add", post(handlers::album_add_photos))
         .route("/rpc/v1/albums/{album_id}/photos:remove", post(handlers::album_remove_photos))
         .with_state(state)
+        .layer(cors)
 }

@@ -7,25 +7,12 @@ TIMEOUT_SEC="${TIMEOUT_SEC:-120}"
 
 json_get() {
   local path="$1"
-  python3 - "$path" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-obj = json.load(sys.stdin)
-cur = obj
-for p in path.split('.'):
-    if p == '':
+  python3 -c 'import json,sys; path=sys.argv[1]; obj=json.load(sys.stdin); cur=obj
+for p in path.split("."):
+    if not p:
         continue
-    if p.isdigit():
-        cur = cur[int(p)]
-    else:
-        cur = cur[p]
-if isinstance(cur, (dict, list)):
-    print(json.dumps(cur, ensure_ascii=False))
-else:
-    print(cur)
-PY
+    cur = cur[int(p)] if p.isdigit() else cur[p]
+print(json.dumps(cur, ensure_ascii=False) if isinstance(cur, (dict, list)) else cur)' "$path"
 }
 
 call_api() {
