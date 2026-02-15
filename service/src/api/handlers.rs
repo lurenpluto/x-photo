@@ -15,7 +15,8 @@ use crate::api::types::{
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
-    patterns_from_delimiters, parse_album_from_dir_name_with_patterns, DirectoryRulePattern,
+    patterns_from_delimiters, parse_album_from_dir_name_with_patterns, AlbumRulePattern,
+    RegexRulePattern,
 };
 use crate::domain::models::{build_album_id, build_photo_id, Album, Photo, Source};
 use crate::infra::storage::local_fs::LocalFsAdapter;
@@ -154,7 +155,7 @@ pub async fn trigger_source_scan(
     let pool_for_task = state.pool.clone();
     let job_id_for_task = job_id.clone();
     let album_rule_patterns = if state.config.album_rules.enabled {
-        patterns_from_delimiters(&state.config.album_rules.date_delimiters)
+        build_album_rule_patterns(&state.config)
     } else {
         Vec::new()
     };
@@ -430,7 +431,7 @@ async fn run_scan_job(
     pool: SqlitePool,
     job_id: String,
     source: Source,
-    album_rule_patterns: Vec<DirectoryRulePattern>,
+    album_rule_patterns: Vec<AlbumRulePattern>,
 ) -> Result<(), String> {
     let running_at = Utc::now().to_rfc3339();
     sqlx::query("UPDATE scan_jobs SET status = 'running', started_at = ? WHERE id = ?")
@@ -908,7 +909,7 @@ async fn ensure_album_by_dir_rule(
     source_id: &str,
     file_path: &str,
     photo_id: &str,
-    rule_patterns: &[DirectoryRulePattern],
+    rule_patterns: &[AlbumRulePattern],
     cache: &mut HashMap<String, String>,
 ) -> Result<bool, String> {
     let path = StdPath::new(file_path);
@@ -1016,6 +1017,29 @@ async fn ensure_album_by_dir_rule(
     })?;
 
     Ok(true)
+}
+
+fn build_album_rule_patterns(config: &crate::config::AppConfig) -> Vec<AlbumRulePattern> {
+    let mut patterns = patterns_from_delimiters(&config.album_rules.date_delimiters)
+        .into_iter()
+        .map(AlbumRulePattern::Delimiter)
+        .collect::<Vec<_>>();
+
+    for p in &config.album_rules.regex_patterns {
+        if p.regex.trim().is_empty() {
+            continue;
+        }
+
+        patterns.push(AlbumRulePattern::Regex(RegexRulePattern {
+            key: p.key.clone(),
+            regex: p.regex.clone(),
+            date_capture: p.date_capture.clone(),
+            name_capture: p.name_capture.clone(),
+            date_input_format: p.date_input_format.clone(),
+        }));
+    }
+
+    patterns
 }
 
 #[allow(clippy::too_many_arguments)]

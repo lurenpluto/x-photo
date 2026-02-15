@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use regex::Regex;
 
 #[derive(Debug, Clone)]
 pub struct AlbumRuleMatch {
@@ -13,19 +14,46 @@ pub struct DirectoryRulePattern {
     pub delimiter: char,
 }
 
+#[derive(Debug, Clone)]
+pub struct RegexRulePattern {
+    pub key: String,
+    pub regex: String,
+    pub date_capture: String,
+    pub name_capture: String,
+    pub date_input_format: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum AlbumRulePattern {
+    Delimiter(DirectoryRulePattern),
+    Regex(RegexRulePattern),
+}
+
 pub fn parse_album_from_dir_name(dir_name: &str) -> Option<AlbumRuleMatch> {
     let defaults = vec![".".to_string(), "_".to_string(), "-".to_string()];
-    let patterns = patterns_from_delimiters(&defaults);
+    let patterns = patterns_from_delimiters(&defaults)
+        .into_iter()
+        .map(AlbumRulePattern::Delimiter)
+        .collect::<Vec<_>>();
     parse_album_from_dir_name_with_patterns(dir_name, &patterns)
 }
 
 pub fn parse_album_from_dir_name_with_patterns(
     dir_name: &str,
-    patterns: &[DirectoryRulePattern],
+    patterns: &[AlbumRulePattern],
 ) -> Option<AlbumRuleMatch> {
     for pattern in patterns {
-        if let Some(matched) = parse_by_delimiter(&pattern.key, dir_name, pattern.delimiter) {
-            return Some(matched);
+        match pattern {
+            AlbumRulePattern::Delimiter(v) => {
+                if let Some(matched) = parse_by_delimiter(&v.key, dir_name, v.delimiter) {
+                    return Some(matched);
+                }
+            }
+            AlbumRulePattern::Regex(v) => {
+                if let Some(matched) = parse_by_regex(v, dir_name) {
+                    return Some(matched);
+                }
+            }
         }
     }
     None
@@ -55,6 +83,28 @@ pub fn patterns_from_delimiters(delimiters: &[String]) -> Vec<DirectoryRulePatte
     out
 }
 
+fn parse_by_regex(pattern: &RegexRulePattern, dir_name: &str) -> Option<AlbumRuleMatch> {
+    let re = Regex::new(&pattern.regex).ok()?;
+    let captures = re.captures(dir_name)?;
+
+    let date_raw = captures.name(&pattern.date_capture)?.as_str();
+    let album_name = captures
+        .name(&pattern.name_capture)?
+        .as_str()
+        .trim()
+        .to_string();
+    if album_name.is_empty() {
+        return None;
+    }
+
+    let parsed_date = NaiveDate::parse_from_str(date_raw, &pattern.date_input_format).ok()?;
+    Some(AlbumRuleMatch {
+        rule_name: pattern.key.clone(),
+        album_date: parsed_date.format("%Y-%m-%d").to_string(),
+        album_name,
+    })
+}
+
 fn parse_by_delimiter(rule_name: &str, dir_name: &str, delim: char) -> Option<AlbumRuleMatch> {
     let parts: Vec<&str> = dir_name.split(delim).collect();
     if parts.len() < 4 {
@@ -80,7 +130,10 @@ fn parse_by_delimiter(rule_name: &str, dir_name: &str, delim: char) -> Option<Al
 
 #[cfg(test)]
 mod tests {
-    use super::parse_album_from_dir_name;
+    use super::{
+        parse_album_from_dir_name, parse_album_from_dir_name_with_patterns, AlbumRulePattern,
+        RegexRulePattern,
+    };
 
     #[test]
     fn parses_dot_mode() {
@@ -102,6 +155,24 @@ mod tests {
     fn parses_hyphen_mode() {
         let matched = parse_album_from_dir_name("2020-02-01-深圳湾公园").unwrap();
         assert_eq!(matched.rule_name, "date_hyphen");
+        assert_eq!(matched.album_date, "2020-02-01");
+        assert_eq!(matched.album_name, "深圳湾公园");
+    }
+
+    #[test]
+    fn parses_regex_mode() {
+        let patterns = vec![AlbumRulePattern::Regex(RegexRulePattern {
+            key: "date_chinese".to_string(),
+            regex: "^(?<date>\\d{4}年\\d{2}月\\d{2}日)[._-](?<name>.+)$".to_string(),
+            date_capture: "date".to_string(),
+            name_capture: "name".to_string(),
+            date_input_format: "%Y年%m月%d日".to_string(),
+        })];
+
+        let matched =
+            parse_album_from_dir_name_with_patterns("2020年02月01日.深圳湾公园", &patterns)
+                .unwrap();
+        assert_eq!(matched.rule_name, "date_chinese");
         assert_eq!(matched.album_date, "2020-02-01");
         assert_eq!(matched.album_name, "深圳湾公园");
     }

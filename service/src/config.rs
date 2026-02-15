@@ -42,6 +42,17 @@ pub struct StorageConfig {
 pub struct AlbumRulesConfig {
     pub enabled: bool,
     pub date_delimiters: Vec<String>,
+    pub regex_patterns: Vec<AlbumRegexRuleConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlbumRegexRuleConfig {
+    pub key: String,
+    pub regex: String,
+    pub date_capture: String,
+    pub name_capture: String,
+    pub date_input_format: String,
 }
 
 impl Default for AppConfig {
@@ -63,7 +74,20 @@ impl Default for AppConfig {
             album_rules: AlbumRulesConfig {
                 enabled: true,
                 date_delimiters: vec![".".to_string(), "_".to_string(), "-".to_string()],
+                regex_patterns: Vec::new(),
             },
+        }
+    }
+}
+
+impl Default for AlbumRegexRuleConfig {
+    fn default() -> Self {
+        Self {
+            key: "custom_regex".to_string(),
+            regex: String::new(),
+            date_capture: "date".to_string(),
+            name_capture: "name".to_string(),
+            date_input_format: "%Y.%m.%d".to_string(),
         }
     }
 }
@@ -106,6 +130,7 @@ impl Default for AlbumRulesConfig {
         Self {
             enabled: true,
             date_delimiters: vec![".".to_string(), "_".to_string(), "-".to_string()],
+            regex_patterns: Vec::new(),
         }
     }
 }

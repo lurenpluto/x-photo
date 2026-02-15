@@ -14,3 +14,10 @@ allow_delete = false
 [album_rules]
 enabled = true
 date_delimiters = [".", "_", "-"]
+
+[[album_rules.regex_patterns]]
+key = "date_chinese"
+regex = "^(?<date>\\d{4}年\\d{2}月\\d{2}日)[._-](?<name>.+)$"
+date_capture = "date"
+name_capture = "name"
+date_input_format = "%Y年%m月%d日"
