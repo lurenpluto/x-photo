@@ -1,5 +1,7 @@
+use std::path::Path as StdPath;
+
 use axum::{extract::Path, extract::State, http::StatusCode, Json};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
@@ -9,7 +11,7 @@ use crate::api::types::{
     ApiResponse, CreateAlbumRequest, CreateSourceRequest, PagedData, PhotoSearchRequest,
     ScanTriggerResponse,
 };
-use crate::domain::models::{build_album_id, Album, Photo, Source};
+use crate::domain::models::{build_album_id, build_photo_id, Album, Photo, Source};
 use crate::infra::storage::local_fs::LocalFsAdapter;
 use crate::infra::storage::StorageAdapter;
 
@@ -425,11 +427,85 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
     info!(job_id, source_id = source.id, from = "pending", to = "running", "scan job status transition");
 
     let source_root = source.root_path.clone();
-    let scan_result = tokio::task::spawn_blocking(move || {
+    let collect_result = tokio::task::spawn_blocking(move || {
         let adapter = LocalFsAdapter::new(false);
-        let entries = adapter.list_entries(&source_root).map_err(|e| e.to_string())?;
-        let file_count = entries.iter().filter(|e| !e.is_dir).count() as i64;
-        Ok::<i64, String>(file_count)
+        let entries = adapter.list_entries(&source_root).map_err(|e| {
+            format!(
+                "failed to list source entries at {}: {}",
+                source_root,
+                e
+            )
+        })?;
+
+        let mut candidates: Vec<ScannedPhotoCandidate> = Vec::new();
+        let mut failed_count: i64 = 0;
+        let mut first_error: Option<String> = None;
+
+        for entry in entries {
+            if entry.is_dir || !is_photo_path(&entry.path) {
+                continue;
+            }
+
+            let file_path = entry.path.to_string_lossy().to_string();
+            let file_name = entry
+                .path
+                .file_name()
+                .map(|v| v.to_string_lossy().to_string())
+                .unwrap_or_else(|| file_path.clone());
+            let file_ext = file_ext_lowercase(&entry.path);
+
+            let storage_file_id = match adapter.canonical_id(&file_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    failed_count += 1;
+                    let msg = format!("failed to get canonical_id for {}: {}", file_path, e);
+                    warn!("{}", msg);
+                    if first_error.is_none() {
+                        first_error = Some(msg);
+                    }
+                    continue;
+                }
+            };
+
+            let content_hash = match adapter.sha256(&file_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    failed_count += 1;
+                    let msg = format!("failed to calculate sha256 for {}: {}", file_path, e);
+                    warn!("{}", msg);
+                    if first_error.is_none() {
+                        first_error = Some(msg);
+                    }
+                    continue;
+                }
+            };
+
+            let modified_at_fs = entry
+                .modified_at
+                .map(|t| DateTime::<Utc>::from(t).to_rfc3339());
+            let sort_time = modified_at_fs
+                .clone()
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            candidates.push(ScannedPhotoCandidate {
+                storage_file_id,
+                file_path,
+                file_name,
+                file_ext: file_ext.clone(),
+                file_size: std::cmp::min(entry.size, i64::MAX as u64) as i64,
+                mime_type: mime_from_ext(file_ext.as_deref()),
+                content_hash,
+                created_at_fs: None,
+                modified_at_fs,
+                sort_time,
+            });
+        }
+
+        Ok::<ScanCollectResult, String>(ScanCollectResult {
+            candidates,
+            failed_count,
+            first_error,
+        })
     })
     .await
     .map_err(|e| {
@@ -438,16 +514,103 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
         msg
     })?;
 
-    match scan_result {
-        Ok(total_count) => {
+    match collect_result {
+        Ok(result) => {
+            let mut new_count: i64 = 0;
+            let mut updated_count: i64 = 0;
+            let mut failed_count: i64 = result.failed_count;
+            let now = Utc::now().to_rfc3339();
+
+            for candidate in &result.candidates {
+                let existing: Option<String> = sqlx::query_scalar(
+                    "SELECT id FROM photos WHERE source_id = ? AND storage_file_id = ?",
+                )
+                .bind(&source.id)
+                .bind(&candidate.storage_file_id)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| {
+                    let msg = format!(
+                        "failed to check existing photo (source_id={}, storage_file_id={}, job_id={}): {}",
+                        source.id, candidate.storage_file_id, job_id, e
+                    );
+                    error!("{}", msg);
+                    msg
+                })?;
+
+                if existing.is_some() {
+                    updated_count += 1;
+                } else {
+                    new_count += 1;
+                }
+
+                let photo_id = build_photo_id(&source.id, &candidate.storage_file_id);
+                let upsert_result = sqlx::query(
+                    "INSERT INTO photos (
+                        id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
+                        content_hash, shot_at, created_at_fs, modified_at_fs, sort_time, width, height,
+                        exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
+                     ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, NULL, ?, ?, ?, NULL, NULL,
+                        NULL, NULL, NULL, NULL, NULL, ?, ?
+                     )
+                     ON CONFLICT(source_id, storage_file_id) DO UPDATE SET
+                        file_path = excluded.file_path,
+                        file_name = excluded.file_name,
+                        file_ext = excluded.file_ext,
+                        file_size = excluded.file_size,
+                        mime_type = excluded.mime_type,
+                        content_hash = excluded.content_hash,
+                        created_at_fs = excluded.created_at_fs,
+                        modified_at_fs = excluded.modified_at_fs,
+                        sort_time = excluded.sort_time,
+                        deleted_at = NULL,
+                        updated_at = excluded.updated_at",
+                )
+                .bind(&photo_id)
+                .bind(&source.id)
+                .bind(&candidate.storage_file_id)
+                .bind(&candidate.file_path)
+                .bind(&candidate.file_name)
+                .bind(candidate.file_ext.as_deref())
+                .bind(candidate.file_size)
+                .bind(candidate.mime_type.as_deref())
+                .bind(&candidate.content_hash)
+                .bind(candidate.created_at_fs.as_deref())
+                .bind(candidate.modified_at_fs.as_deref())
+                .bind(&candidate.sort_time)
+                .bind(&now)
+                .bind(&now)
+                .execute(&pool)
+                .await;
+
+                if let Err(e) = upsert_result {
+                    failed_count += 1;
+                    error!(
+                        job_id,
+                        source_id = source.id,
+                        file_path = candidate.file_path,
+                        storage_file_id = candidate.storage_file_id,
+                        error = %e,
+                        "photo upsert failed"
+                    );
+                }
+            }
+
+            let total_count = (result.candidates.len() as i64) + result.failed_count;
             let finished_at = Utc::now().to_rfc3339();
             sqlx::query(
                 "UPDATE scan_jobs
-                 SET status = 'success', finished_at = ?, total_count = ?, new_count = 0, updated_count = 0, failed_count = 0, error_message = NULL
+                 SET status = 'success', finished_at = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
                  WHERE id = ?",
             )
             .bind(&finished_at)
             .bind(total_count)
+            .bind(new_count)
+            .bind(updated_count)
+            .bind(failed_count)
+            .bind(result.first_error.as_deref())
             .bind(&job_id)
             .execute(&pool)
             .await
@@ -460,7 +623,17 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
                 msg
             })?;
 
-            info!(job_id, source_id = source.id, from = "running", to = "success", total_count, "scan job status transition");
+            info!(
+                job_id,
+                source_id = source.id,
+                from = "running",
+                to = "success",
+                total_count,
+                new_count,
+                updated_count,
+                failed_count,
+                "scan job status transition"
+            );
             Ok(())
         }
         Err(scan_error) => {
@@ -487,5 +660,61 @@ async fn run_scan_job(pool: SqlitePool, job_id: String, source: Source) -> Resul
             error!(job_id, source_id = source.id, from = "running", to = "failed", error = %scan_error, "scan job status transition");
             Err(scan_error)
         }
+    }
+}
+
+#[derive(Debug)]
+struct ScanCollectResult {
+    candidates: Vec<ScannedPhotoCandidate>,
+    failed_count: i64,
+    first_error: Option<String>,
+}
+
+#[derive(Debug)]
+struct ScannedPhotoCandidate {
+    storage_file_id: String,
+    file_path: String,
+    file_name: String,
+    file_ext: Option<String>,
+    file_size: i64,
+    mime_type: Option<String>,
+    content_hash: String,
+    created_at_fs: Option<String>,
+    modified_at_fs: Option<String>,
+    sort_time: String,
+}
+
+fn is_photo_path(path: &StdPath) -> bool {
+    match file_ext_lowercase(path).as_deref() {
+        Some("jpg")
+        | Some("jpeg")
+        | Some("png")
+        | Some("gif")
+        | Some("webp")
+        | Some("heic")
+        | Some("heif")
+        | Some("bmp")
+        | Some("tiff")
+        | Some("tif") => true,
+        _ => false,
+    }
+}
+
+fn file_ext_lowercase(path: &StdPath) -> Option<String> {
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+}
+
+fn mime_from_ext(ext: Option<&str>) -> Option<String> {
+    match ext {
+        Some("jpg") | Some("jpeg") => Some("image/jpeg".to_string()),
+        Some("png") => Some("image/png".to_string()),
+        Some("gif") => Some("image/gif".to_string()),
+        Some("webp") => Some("image/webp".to_string()),
+        Some("heic") => Some("image/heic".to_string()),
+        Some("heif") => Some("image/heif".to_string()),
+        Some("bmp") => Some("image/bmp".to_string()),
+        Some("tiff") | Some("tif") => Some("image/tiff".to_string()),
+        _ => None,
     }
 }
