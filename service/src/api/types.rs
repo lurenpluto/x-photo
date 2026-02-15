@@ -27,6 +27,11 @@ pub struct CreateSourceRequest {
 #[derive(Debug, Deserialize)]
 pub struct PhotoSearchRequest {
     pub keyword: Option<String>,
+    pub album_id: Option<String>,
+    pub source_id: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+    pub order: Option<String>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
 }

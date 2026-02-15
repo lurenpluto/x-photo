@@ -6,7 +6,7 @@ use axum::{extract::Path, extract::Query, extract::State, http::StatusCode, Json
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sqlx::{Row, SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use tracing::{error, info, warn};
 
 use crate::api::types::{
@@ -351,91 +351,97 @@ pub async fn search_photos(
     let page_size = req.page_size.unwrap_or(100).clamp(1, 500);
     let offset = (page - 1) * page_size;
     let keyword = req.keyword.unwrap_or_default().trim().to_string();
+    let album_id = req.album_id.unwrap_or_default().trim().to_string();
+    let source_id = req.source_id.unwrap_or_default().trim().to_string();
+    let start_time = req.start_time.unwrap_or_default().trim().to_string();
+    let end_time = req.end_time.unwrap_or_default().trim().to_string();
+    let order = req.order.unwrap_or_else(|| "desc".to_string());
+    let order_desc = !order.eq_ignore_ascii_case("asc");
 
     info!(
         page,
         page_size,
         offset,
         keyword = %keyword,
+        album_id = %album_id,
+        source_id = %source_id,
+        start_time = %start_time,
+        end_time = %end_time,
+        order = %order,
         "search_photos requested"
     );
 
-    let (count_sql, list_sql) = if keyword.is_empty() {
-        (
-            "SELECT COUNT(1) FROM photos WHERE deleted_at IS NULL",
-            "SELECT id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
-                    content_hash, shot_at, created_at_fs, modified_at_fs, sort_time, width, height,
-                    exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
-             FROM photos
-             WHERE deleted_at IS NULL
-             ORDER BY sort_time DESC
-             LIMIT ? OFFSET ?",
-        )
-    } else {
-        (
-            "SELECT COUNT(1) FROM photos WHERE deleted_at IS NULL AND (file_name LIKE ? OR file_path LIKE ? OR IFNULL(remark, '') LIKE ?)",
-            "SELECT id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
-                    content_hash, shot_at, created_at_fs, modified_at_fs, sort_time, width, height,
-                    exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
-             FROM photos
-             WHERE deleted_at IS NULL
-               AND (file_name LIKE ? OR file_path LIKE ? OR IFNULL(remark, '') LIKE ?)
-             ORDER BY sort_time DESC
-             LIMIT ? OFFSET ?",
-        )
-    };
+    let mut count_builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM photos p WHERE p.deleted_at IS NULL");
+    apply_photo_search_filters(
+        &mut count_builder,
+        &keyword,
+        &album_id,
+        &source_id,
+        &start_time,
+        &end_time,
+    );
 
-    let total: i64 = if keyword.is_empty() {
-        sqlx::query_scalar(count_sql)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|err| {
-                internal_db_error("search_photos.count", json!({"keyword": keyword.clone()}), err)
-            })?
-    } else {
-        let like = format!("%{}%", keyword);
-        sqlx::query_scalar(count_sql)
-            .bind(&like)
-            .bind(&like)
-            .bind(&like)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|err| {
-                internal_db_error("search_photos.count_like", json!({"like": like.clone()}), err)
-            })?
-    };
+    let total: i64 = count_builder
+        .build_query_scalar()
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "search_photos.count_dynamic",
+                json!({
+                    "keyword": keyword,
+                    "album_id": album_id,
+                    "source_id": source_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                }),
+                err,
+            )
+        })?;
 
-    let items: Vec<Photo> = if keyword.is_empty() {
-        sqlx::query_as(list_sql)
-            .bind(page_size)
-            .bind(offset)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|err| {
-                internal_db_error(
-                    "search_photos.list",
-                    json!({"page": page, "page_size": page_size, "offset": offset}),
-                    err,
-                )
-            })?
+    let mut list_builder = QueryBuilder::<Sqlite>::new(
+        "SELECT p.id, p.source_id, p.storage_file_id, p.file_path, p.file_name, p.file_ext, p.file_size, p.mime_type,
+                p.content_hash, p.shot_at, p.created_at_fs, p.modified_at_fs, p.sort_time, p.width, p.height,
+                p.exif_json, p.gps_lat, p.gps_lng, p.remark, p.deleted_at, p.created_at, p.updated_at
+         FROM photos p
+         WHERE p.deleted_at IS NULL",
+    );
+    apply_photo_search_filters(
+        &mut list_builder,
+        &keyword,
+        &album_id,
+        &source_id,
+        &start_time,
+        &end_time,
+    );
+
+    if order_desc {
+        list_builder.push(" ORDER BY p.sort_time DESC");
     } else {
-        let like = format!("%{}%", keyword);
-        sqlx::query_as(list_sql)
-            .bind(&like)
-            .bind(&like)
-            .bind(&like)
-            .bind(page_size)
-            .bind(offset)
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|err| {
-                internal_db_error(
-                    "search_photos.list_like",
-                    json!({"like": like.clone(), "page": page, "page_size": page_size, "offset": offset}),
-                    err,
-                )
-            })?
-    };
+        list_builder.push(" ORDER BY p.sort_time ASC");
+    }
+    list_builder
+        .push(" LIMIT ")
+        .push_bind(page_size)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let items: Vec<Photo> = list_builder
+        .build_query_as()
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "search_photos.list_dynamic",
+                json!({
+                    "page": page,
+                    "page_size": page_size,
+                    "offset": offset,
+                    "order": if order_desc { "desc" } else { "asc" },
+                }),
+                err,
+            )
+        })?;
 
     info!(total, returned = items.len(), page, page_size, "search_photos completed");
 
@@ -445,6 +451,49 @@ pub async fn search_photos(
         page_size,
         items,
     })))
+}
+
+fn apply_photo_search_filters(
+    builder: &mut QueryBuilder<Sqlite>,
+    keyword: &str,
+    album_id: &str,
+    source_id: &str,
+    start_time: &str,
+    end_time: &str,
+) {
+    if !keyword.is_empty() {
+        let like = format!("%{}%", keyword);
+        builder.push(" AND (p.file_name LIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR p.file_path LIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR IFNULL(p.remark, '') LIKE ");
+        builder.push_bind(like);
+        builder.push(")");
+    }
+
+    if !album_id.is_empty() {
+        builder.push(
+            " AND EXISTS (SELECT 1 FROM photo_albums pa WHERE pa.photo_id = p.id AND pa.album_id = ",
+        );
+        builder.push_bind(album_id.to_string());
+        builder.push(")");
+    }
+
+    if !source_id.is_empty() {
+        builder.push(" AND p.source_id = ");
+        builder.push_bind(source_id.to_string());
+    }
+
+    if !start_time.is_empty() {
+        builder.push(" AND p.sort_time >= ");
+        builder.push_bind(start_time.to_string());
+    }
+
+    if !end_time.is_empty() {
+        builder.push(" AND p.sort_time <= ");
+        builder.push_bind(end_time.to_string());
+    }
 }
 
 pub async fn get_photo_detail(
