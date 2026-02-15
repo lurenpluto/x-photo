@@ -182,3 +182,15 @@ pub struct TaskHealthData {
 pub struct TaskHealthQuery {
     pub stale_after_seconds: Option<i64>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct TaskOverviewQuery {
+    pub include_all_daemon: Option<bool>,
+    pub stale_after_seconds: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskOverviewData {
+    pub active_tasks: Vec<TaskJobData>,
+    pub health: TaskHealthData,
+}
