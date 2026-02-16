@@ -45,6 +45,8 @@ pub struct ScanConfig {
     pub max_concurrent_jobs: usize,
     pub checkpoint_every: usize,
     pub search_index_sync_every: usize,
+    pub hash_parallelism: usize,
+    pub hash_batch_size: usize,
     pub resume_enabled: bool,
     pub task_dispatch_interval_ms: u64,
     pub task_stale_seconds: i64,
@@ -91,6 +93,8 @@ impl Default for AppConfig {
                 max_concurrent_jobs: 2,
                 checkpoint_every: 50,
                 search_index_sync_every: 100,
+                hash_parallelism: 4,
+                hash_batch_size: 32,
                 resume_enabled: true,
                 task_dispatch_interval_ms: 2000,
                 task_stale_seconds: 120,
@@ -157,6 +161,8 @@ impl Default for ScanConfig {
             max_concurrent_jobs: 2,
             checkpoint_every: 50,
             search_index_sync_every: 100,
+            hash_parallelism: 4,
+            hash_batch_size: 32,
             resume_enabled: true,
             task_dispatch_interval_ms: 2000,
             task_stale_seconds: 120,
@@ -227,6 +233,16 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(v) = std::env::var("SCAN_SEARCH_INDEX_SYNC_EVERY") {
         if let Ok(n) = v.parse::<usize>() {
             config.scan.search_index_sync_every = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_HASH_PARALLELISM") {
+        if let Ok(n) = v.parse::<usize>() {
+            config.scan.hash_parallelism = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_HASH_BATCH_SIZE") {
+        if let Ok(n) = v.parse::<usize>() {
+            config.scan.hash_batch_size = n;
         }
     }
     if let Ok(v) = std::env::var("SCAN_RESUME_ENABLED") {
@@ -394,6 +410,8 @@ allow_delete = false
 max_concurrent_jobs = 2
 checkpoint_every = 50
 search_index_sync_every = 100
+hash_parallelism = 4
+hash_batch_size = 32
 resume_enabled = true
 task_dispatch_interval_ms = 2000
 task_stale_seconds = 120

@@ -14,6 +14,7 @@ use axum::{
     Json,
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
+use rayon::prelude::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
@@ -2721,6 +2722,8 @@ async fn enqueue_scan_job(
     let job_id_for_task = job_id.clone();
     let checkpoint_every = state.config.scan.checkpoint_every.max(1);
     let search_index_sync_every = state.config.scan.search_index_sync_every.max(1);
+    let hash_parallelism = state.config.scan.hash_parallelism.max(1);
+    let hash_batch_size = state.config.scan.hash_batch_size.max(1);
     let resume_enabled = state.config.scan.resume_enabled;
     let album_rule_patterns = if state.config.album_rules.enabled {
         build_album_rule_patterns(&state.config)
@@ -2743,6 +2746,8 @@ async fn enqueue_scan_job(
             album_rule_patterns,
             checkpoint_every,
             search_index_sync_every,
+            hash_parallelism,
+            hash_batch_size,
             resume_enabled,
         )
         .await
@@ -2827,6 +2832,8 @@ async fn run_scan_job(
     album_rule_patterns: Vec<AlbumRulePattern>,
     checkpoint_every: usize,
     search_index_sync_every: usize,
+    hash_parallelism: usize,
+    hash_batch_size: usize,
     resume_enabled: bool,
 ) -> Result<(), String> {
     let current_status: Option<String> = sqlx::query_scalar("SELECT status FROM scan_jobs WHERE id = ?")
@@ -2973,6 +2980,17 @@ async fn run_scan_job(
 
     match collect_result {
         Ok(result) => {
+            let hash_pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(hash_parallelism)
+                .build()
+                .map_err(|e| {
+                    format!(
+                        "failed to create hash rayon pool (job_id={}, source_id={}, hash_parallelism={}): {}",
+                        job_id, source.id, hash_parallelism, e
+                    )
+                })?;
+            let hash_pool = Arc::new(hash_pool);
+
             let mut new_count: i64 = 0;
             let mut updated_count: i64 = 0;
             let mut skipped_count: i64 = 0;
@@ -3001,7 +3019,7 @@ async fn run_scan_job(
             )
             .await?;
 
-            for entry in &result.entries {
+            for batch in result.entries.chunks(hash_batch_size) {
                 if is_cancel_requested(&pool, &job_id).await? {
                     let finished_at = Utc::now().to_rfc3339();
                     sqlx::query(
@@ -3045,57 +3063,33 @@ async fn run_scan_job(
                     return Ok(());
                 }
 
-                let entry_for_collect = entry.clone();
-                let candidate_result = tokio::task::spawn_blocking(move || {
-                    let adapter = LocalFsAdapter::new(false);
-                    let storage_file_id = adapter
-                        .canonical_id(&entry_for_collect.file_path)
-                        .map_err(|e| format!("failed to get canonical_id for {}: {}", entry_for_collect.file_path, e))?;
-                    let content_hash = adapter
-                        .sha256(&entry_for_collect.file_path)
-                        .map_err(|e| format!("failed to calculate sha256 for {}: {}", entry_for_collect.file_path, e))?;
-
-                    let (shot_at, exif_json) = match parse_exif_for_scan(&entry_for_collect.file_path) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            warn!(file_path = entry_for_collect.file_path, error = %e, "failed to parse exif, fallback to fs time");
-                            (None, None)
-                        }
-                    };
-
-                    let sort_time = shot_at
-                        .clone()
-                        .unwrap_or_else(|| entry_for_collect.sort_time.clone());
-                    let mime_type = mime_from_ext(entry_for_collect.file_ext.as_deref());
-
-                    Ok::<ScannedPhotoCandidate, String>(ScannedPhotoCandidate {
-                        storage_file_id,
-                        file_path: entry_for_collect.file_path,
-                        file_name: entry_for_collect.file_name,
-                        file_ext: entry_for_collect.file_ext,
-                        file_size: entry_for_collect.file_size,
-                        mime_type,
-                        content_hash,
-                        shot_at,
-                        created_at_fs: entry_for_collect.created_at_fs,
-                        modified_at_fs: entry_for_collect.modified_at_fs,
-                        sort_time,
-                        exif_json,
+                let batch_entries = batch.to_vec();
+                let hash_pool_for_batch = hash_pool.clone();
+                let batch_results = tokio::task::spawn_blocking(move || {
+                    hash_pool_for_batch.install(|| {
+                        batch_entries
+                            .into_par_iter()
+                            .map(|entry| {
+                                let result = build_scan_candidate(entry.clone());
+                                (entry, result)
+                            })
+                            .collect::<Vec<(ScannedPhotoEntry, Result<ScannedPhotoCandidate, String>)>>()
                     })
                 })
                 .await
                 .map_err(|e| {
                     format!(
-                        "scan metadata collect join failed for job {} and source {}: {}",
+                        "scan metadata collect batch join failed for job {} and source {}: {}",
                         job_id, source.id, e
                     )
                 })?;
 
-                collect_processed += 1;
-                last_scanned_path = Some(entry.file_path.clone());
-                last_scanned_modified_at = entry.modified_at_fs.clone();
+                for (entry, candidate_result) in batch_results {
+                    collect_processed += 1;
+                    last_scanned_path = Some(entry.file_path.clone());
+                    last_scanned_modified_at = entry.modified_at_fs.clone();
 
-                match candidate_result {
+                    match candidate_result {
                     Ok(candidate) => {
                         last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
                         last_scanned_content_hash = Some(candidate.content_hash.clone());
@@ -3233,6 +3227,7 @@ async fn run_scan_job(
                         if first_error.is_none() {
                             first_error = Some(e);
                         }
+                    }
                     }
                 }
 
@@ -3418,6 +3413,42 @@ struct ScannedPhotoCandidate {
     modified_at_fs: Option<String>,
     sort_time: String,
     exif_json: Option<String>,
+}
+
+fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidate, String> {
+    let adapter = LocalFsAdapter::new(false);
+    let storage_file_id = adapter
+        .canonical_id(&entry.file_path)
+        .map_err(|e| format!("failed to get canonical_id for {}: {}", entry.file_path, e))?;
+    let content_hash = adapter
+        .sha256(&entry.file_path)
+        .map_err(|e| format!("failed to calculate sha256 for {}: {}", entry.file_path, e))?;
+
+    let (shot_at, exif_json) = match parse_exif_for_scan(&entry.file_path) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(file_path = entry.file_path, error = %e, "failed to parse exif, fallback to fs time");
+            (None, None)
+        }
+    };
+
+    let sort_time = shot_at.clone().unwrap_or(entry.sort_time.clone());
+    let mime_type = mime_from_ext(entry.file_ext.as_deref());
+
+    Ok(ScannedPhotoCandidate {
+        storage_file_id,
+        file_path: entry.file_path,
+        file_name: entry.file_name,
+        file_ext: entry.file_ext,
+        file_size: entry.file_size,
+        mime_type,
+        content_hash,
+        shot_at,
+        created_at_fs: entry.created_at_fs,
+        modified_at_fs: entry.modified_at_fs,
+        sort_time,
+        exif_json,
+    })
 }
 
 fn is_photo_path(path: &StdPath) -> bool {
