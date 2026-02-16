@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path as StdPath;
 use std::sync::Arc;
 
@@ -1590,6 +1590,10 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
             error!(error = %e, "failed to ensure task dispatcher daemon row");
         }
 
+        if let Err(e) = bootstrap_failed_sources_for_retry(state.clone()).await {
+            error!(error = %e, "failed to bootstrap failed sources for retry");
+        }
+
         loop {
             if let Err(e) = update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await {
                 error!(error = %e, "failed to update task dispatcher heartbeat");
@@ -1603,6 +1607,79 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
             sleep(Duration::from_millis(interval_ms)).await;
         }
     });
+}
+
+async fn bootstrap_failed_sources_for_retry(state: Arc<AppState>) -> Result<(), String> {
+    let failed_source_ids = sqlx::query_scalar::<_, String>(
+        "SELECT s.id
+         FROM sources s
+         INNER JOIN source_scan_states st ON st.source_id = s.id
+         WHERE s.enabled = 1 AND st.status = 'failed'",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("failed to load failed sources for startup bootstrap: {}", e))?;
+
+    if failed_source_ids.is_empty() {
+        return Ok(());
+    }
+
+    let active_scan_sources = sqlx::query_scalar::<_, String>(
+        "SELECT DISTINCT source_id
+         FROM scan_jobs
+         WHERE status IN ('pending', 'running')",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("failed to load active scan sources for startup bootstrap: {}", e))?;
+
+    let mut blocked_source_ids = active_scan_sources.into_iter().collect::<HashSet<_>>();
+
+    let active_task_rows = sqlx::query(
+        "SELECT payload_json
+         FROM task_jobs
+         WHERE job_type = 'scan' AND status IN ('pending', 'running')",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("failed to load active scan tasks for startup bootstrap: {}", e))?;
+
+    for row in active_task_rows {
+        let payload_json: Option<String> = row.get("payload_json");
+        if let Some(source_id) = extract_source_id_from_payload(payload_json.as_deref()) {
+            blocked_source_ids.insert(source_id);
+        }
+    }
+
+    let mut scheduled = 0_i64;
+    for source_id in failed_source_ids {
+        if blocked_source_ids.contains(&source_id) {
+            continue;
+        }
+
+        let task_job_id = create_scan_task_job(
+            state.clone(),
+            &source_id,
+            TRIGGER_RETRY,
+            json!({
+                "source_id": source_id,
+                "startup_recovery": true,
+            }),
+        )
+        .await?;
+
+        scheduled += 1;
+        info!(task_job_id, source_id, "startup bootstrap scheduled retry scan task for failed source");
+    }
+
+    info!(scheduled, "startup bootstrap completed for failed source scan retries");
+    Ok(())
+}
+
+fn extract_source_id_from_payload(payload_json: Option<&str>) -> Option<String> {
+    payload_json
+        .and_then(|v| serde_json::from_str::<Value>(v).ok())
+        .and_then(|v| v.get("source_id").and_then(|s| s.as_str()).map(|s| s.to_string()))
 }
 
 async fn ensure_daemon_task_row(
