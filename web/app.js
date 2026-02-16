@@ -2,6 +2,7 @@ const state = {
   apiBase: localStorage.getItem("xphoto_api_base") || "http://127.0.0.1:8080/rpc/v1",
   tab: "photos",
   albums: [],
+  albumPhotoCounts: {},
   selectedPhotoId: null,
   selectedPhotoAlbums: [],
   photoItems: [],
@@ -209,6 +210,21 @@ function formatShotTime(isoText) {
   if (!isoText) return "未知";
   const t = String(isoText).replace("T", " ");
   return t.length > 19 ? t.slice(0, 19) : t;
+}
+
+function formatIsoToSecond(isoText) {
+  if (!isoText) return "-";
+  const d = new Date(isoText);
+  if (!Number.isNaN(d.getTime())) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+  }
+  return String(isoText).replace("T", " ").slice(0, 19);
 }
 
 function setApiBase(value) {
@@ -574,13 +590,14 @@ function renderAlbumCards(target, albums) {
       (a) => {
         const visual = albumVisualStyle(a);
         const title = a.name || "未命名相册";
-        const timeLabel = (a.created_at || "").slice(0, 10) || "-";
+        const count = state.albumPhotoCounts[a.id];
+        const countLabel = Number.isFinite(count) ? `${count} 项` : "...";
         return `
       <article class="album-card" data-album-id="${a.id}">
         <div class="album-cover" style="background:${visual.background};">
-          <p class="item-title">${escapeHtml(title)}</p>
         </div>
-        <p class="item-sub">${escapeHtml(timeLabel)} · ${a.auto_created ? "自动" : "手动"} · ${a.id.slice(0, 10)}...</p>
+        <p class="album-name">${escapeHtml(title)}</p>
+        <p class="album-count">${escapeHtml(countLabel)}</p>
       </article>
     `;
       },
@@ -597,6 +614,29 @@ function renderAlbumCards(target, albums) {
   });
 }
 
+async function loadAlbumPhotoCounts(albums) {
+  const ids = albums.map((a) => a.id);
+  const counts = await Promise.all(
+    ids.map(async (albumId) => {
+      try {
+        const data = await api("/photos/search", {
+          method: "POST",
+          body: JSON.stringify({ album_id: albumId, page: 1, page_size: 1 }),
+        });
+        return [albumId, Number(data.total || 0)];
+      } catch (_err) {
+        return [albumId, null];
+      }
+    }),
+  );
+
+  for (const [albumId, count] of counts) {
+    if (Number.isFinite(count)) {
+      state.albumPhotoCounts[albumId] = count;
+    }
+  }
+}
+
 async function loadAlbums() {
   el.latestAlbumsRow.innerHTML = '<div class="loading">加载最新相册...</div>';
   if (state.tab === "albums") {
@@ -606,6 +646,15 @@ async function loadAlbums() {
     state.albums = await api("/albums", { method: "GET" });
     renderAlbumCards(el.albumGrid, state.albums);
     renderAlbumCards(el.latestAlbumsRow, state.albums.slice(0, 8));
+
+    loadAlbumPhotoCounts(state.albums)
+      .then(() => {
+        renderAlbumCards(el.albumGrid, state.albums);
+        renderAlbumCards(el.latestAlbumsRow, state.albums.slice(0, 8));
+      })
+      .catch(() => {
+        // ignore count refresh errors
+      });
 
     el.photoAlbumSelect.innerHTML = state.albums.length
       ? state.albums.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("")
@@ -1257,8 +1306,8 @@ async function loadAlbumDetailMeta(albumId) {
     ["相册ID", album.id],
     ["相册名", album.name],
     ["创建方式", album.auto_created ? "自动" : "手动"],
-    ["创建时间", album.created_at || "-"],
-    ["更新时间", album.updated_at || "-"],
+    ["创建时间", formatIsoToSecond(album.created_at)],
+    ["更新时间", formatIsoToSecond(album.updated_at)],
   ]
     .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`)
     .join("");
