@@ -211,8 +211,24 @@
 
           <div id="albumDetailPage" class="detail-page hidden">
             <div id="albumDetailMeta" class="kv"></div>
+            <div class="title-actions">
+              <input id="albumDetailKeyword" placeholder="相册内关键词" />
+              <select id="albumDetailOrder">
+                <option value="desc">时间倒序</option>
+                <option value="asc">时间正序</option>
+              </select>
+              <input id="albumDetailStartDate" type="date" />
+              <input id="albumDetailEndDate" type="date" />
+              <input id="albumDetailPageSize" type="number" min="1" max="100" value="48" />
+              <button id="btnAlbumDetailSearch" class="btn ghost small" type="button">筛选</button>
+            </div>
             <h3>相册照片</h3>
             <div id="albumDetailPhotos" class="masonry"></div>
+            <div class="pager">
+              <button id="btnAlbumDetailPrev" class="btn ghost small" type="button">上一页</button>
+              <span id="albumDetailPageHint" class="hint">第 1 页</span>
+              <button id="btnAlbumDetailNext" class="btn ghost small" type="button">下一页</button>
+            </div>
           </div>
         </section>
       </main>

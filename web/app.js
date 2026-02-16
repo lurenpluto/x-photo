@@ -27,6 +27,18 @@ const state = {
     current: null,
     stack: [],
   },
+  albumDetail: {
+    albumId: null,
+    albumName: "",
+    page: 1,
+    total: 0,
+    filters: {
+      keyword: "",
+      order: "desc",
+      start_time: "",
+      end_time: "",
+    },
+  },
   timers: {
     taskAutoRefresh: null,
     taskTickBusy: false,
@@ -97,6 +109,15 @@ const el = {
   albumDetailPage: $("albumDetailPage"),
   albumDetailMeta: $("albumDetailMeta"),
   albumDetailPhotos: $("albumDetailPhotos"),
+  albumDetailKeyword: $("albumDetailKeyword"),
+  albumDetailOrder: $("albumDetailOrder"),
+  albumDetailStartDate: $("albumDetailStartDate"),
+  albumDetailEndDate: $("albumDetailEndDate"),
+  albumDetailPageSize: $("albumDetailPageSize"),
+  btnAlbumDetailSearch: $("btnAlbumDetailSearch"),
+  btnAlbumDetailPrev: $("btnAlbumDetailPrev"),
+  btnAlbumDetailNext: $("btnAlbumDetailNext"),
+  albumDetailPageHint: $("albumDetailPageHint"),
 
   btnDrawerPrev: $("btnDrawerPrev"),
   btnDrawerNext: $("btnDrawerNext"),
@@ -952,29 +973,110 @@ function renderAlbumDetailPhotos(items) {
   });
 }
 
+function syncAlbumDetailFiltersFromForm(resetPage = false) {
+  state.albumDetail.filters.keyword = el.albumDetailKeyword.value.trim();
+  state.albumDetail.filters.order = el.albumDetailOrder.value || "desc";
+  state.albumDetail.filters.start_time = dateToStartIso(el.albumDetailStartDate.value);
+  state.albumDetail.filters.end_time = dateToEndIso(el.albumDetailEndDate.value);
+  if (resetPage) {
+    state.albumDetail.page = 1;
+  }
+}
+
+function applyAlbumDetailFiltersToForm() {
+  el.albumDetailKeyword.value = state.albumDetail.filters.keyword;
+  el.albumDetailOrder.value = state.albumDetail.filters.order;
+  el.albumDetailStartDate.value = isoToDateInput(state.albumDetail.filters.start_time);
+  el.albumDetailEndDate.value = isoToDateInput(state.albumDetail.filters.end_time);
+}
+
+async function loadAlbumDetailMeta(albumId) {
+  const data = await api(`/albums/${albumId}?page=1&page_size=1`, { method: "GET" });
+  const album = data.album;
+  state.albumDetail.albumName = album.name || "相册";
+
+  el.detailTitle.textContent = `相册详情 · ${state.albumDetail.albumName}`;
+  el.albumDetailMeta.innerHTML = [
+    ["id", album.id],
+    ["name", album.name],
+    ["auto_created", album.auto_created ? "yes" : "no"],
+    ["created_at", album.created_at || "-"],
+    ["updated_at", album.updated_at || "-"],
+  ]
+    .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`)
+    .join("");
+}
+
+async function fetchAlbumDetailPhotos() {
+  const albumId = state.albumDetail.albumId;
+  if (!albumId) return;
+
+  el.albumDetailPhotos.innerHTML = '<div class="loading">加载相册照片中...</div>';
+  const pageSize = Number(el.albumDetailPageSize.value) || 48;
+
+  const data = await api("/photos/search", {
+    method: "POST",
+    body: JSON.stringify({
+      keyword: state.albumDetail.filters.keyword || undefined,
+      album_id: albumId,
+      order: state.albumDetail.filters.order,
+      start_time: state.albumDetail.filters.start_time || undefined,
+      end_time: state.albumDetail.filters.end_time || undefined,
+      page: state.albumDetail.page,
+      page_size: pageSize,
+    }),
+  });
+
+  const items = data.items || [];
+  state.albumDetail.total = data.total ?? 0;
+  state.photoItems = items.map((p) => p.id);
+
+  const totalPages = Math.max(1, Math.ceil(state.albumDetail.total / pageSize));
+  el.albumDetailPageHint.textContent = `第 ${state.albumDetail.page} / ${totalPages} 页 · 共 ${state.albumDetail.total} 张`;
+  el.btnAlbumDetailPrev.disabled = state.albumDetail.page <= 1;
+  el.btnAlbumDetailNext.disabled = state.albumDetail.page >= totalPages;
+
+  renderAlbumDetailPhotos(items);
+}
+
+async function searchAlbumDetailPhotos() {
+  syncAlbumDetailFiltersFromForm(true);
+  try {
+    await fetchAlbumDetailPhotos();
+  } catch (err) {
+    el.albumDetailPhotos.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadAlbumDetailPage(page) {
+  const pageSize = Number(el.albumDetailPageSize.value) || 48;
+  const totalPages = Math.max(1, Math.ceil(state.albumDetail.total / pageSize));
+  state.albumDetail.page = Math.max(1, Math.min(totalPages, page));
+  try {
+    await fetchAlbumDetailPhotos();
+  } catch (err) {
+    el.albumDetailPhotos.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 async function openAlbumDetailPage(albumId, options = { pushHistory: true }) {
   openDetailView("album", "相册详情", { albumId }, options);
+  const switchedAlbum = state.albumDetail.albumId !== albumId;
+  state.albumDetail.albumId = albumId;
+  if (switchedAlbum) {
+    state.albumDetail.page = 1;
+    state.albumDetail.filters = {
+      keyword: "",
+      order: "desc",
+      start_time: "",
+      end_time: "",
+    };
+  }
+  applyAlbumDetailFiltersToForm();
   el.albumDetailMeta.innerHTML = "<p>状态</p><p>加载中...</p>";
   el.albumDetailPhotos.innerHTML = '<div class="loading">加载相册照片中...</div>';
   try {
-    const data = await api(`/albums/${albumId}?page=1&page_size=200`, { method: "GET" });
-    const album = data.album;
-    const photos = data.photos?.items || [];
-
-    el.detailTitle.textContent = `相册详情 · ${album.name}`;
-    el.albumDetailMeta.innerHTML = [
-      ["id", album.id],
-      ["name", album.name],
-      ["auto_created", album.auto_created ? "yes" : "no"],
-      ["photo_count", String(data.photos?.total ?? photos.length)],
-      ["created_at", album.created_at || "-"],
-      ["updated_at", album.updated_at || "-"],
-    ]
-      .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`)
-      .join("");
-
-    state.photoItems = photos.map((p) => p.id);
-    renderAlbumDetailPhotos(photos);
+    await Promise.all([loadAlbumDetailMeta(albumId), fetchAlbumDetailPhotos()]);
   } catch (err) {
     el.albumDetailMeta.innerHTML = `<p>错误</p><p>${escapeHtml(err.message)}</p>`;
     el.albumDetailPhotos.innerHTML = "";
@@ -1043,6 +1145,19 @@ function onKeydown(event) {
   if (event.key === "Escape" && state.detail.active) {
     closeDetailView();
     return;
+  }
+
+  if (state.detail.active && state.detail.type === "photo") {
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveDrawerPhoto(-1);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      moveDrawerPhoto(1);
+      return;
+    }
   }
 
   if (state.tab !== "photos") {
@@ -1133,6 +1248,19 @@ function bindEvents() {
   el.btnDrawerNext.addEventListener("click", () => moveDrawerPhoto(1));
   el.btnSaveRemark.addEventListener("click", saveRemark);
   el.btnAddToAlbum.addEventListener("click", addPhotoToAlbum);
+
+  el.btnAlbumDetailSearch.addEventListener("click", searchAlbumDetailPhotos);
+  el.albumDetailKeyword.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      searchAlbumDetailPhotos();
+    }
+  });
+  el.albumDetailOrder.addEventListener("change", searchAlbumDetailPhotos);
+  el.albumDetailStartDate.addEventListener("change", searchAlbumDetailPhotos);
+  el.albumDetailEndDate.addEventListener("change", searchAlbumDetailPhotos);
+  el.albumDetailPageSize.addEventListener("change", searchAlbumDetailPhotos);
+  el.btnAlbumDetailPrev.addEventListener("click", () => loadAlbumDetailPage(state.albumDetail.page - 1));
+  el.btnAlbumDetailNext.addEventListener("click", () => loadAlbumDetailPage(state.albumDetail.page + 1));
 
   document.addEventListener("keydown", onKeydown);
   bindHorizontalDragScroll(el.latestAlbumsRow);
