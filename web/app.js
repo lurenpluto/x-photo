@@ -116,6 +116,7 @@ const el = {
 
   detailView: $("detailView"),
   btnDetailBack: $("btnDetailBack"),
+  btnDetailUp: $("btnDetailUp"),
   detailTitle: $("detailTitle"),
   photoDetailNav: $("photoDetailNav"),
   photoDetailPage: $("photoDetailPage"),
@@ -510,6 +511,7 @@ function updateTabUi() {
 function openDetailView(type, title, payload, options = { pushHistory: true }) {
   if (!state.detail.active) {
     state.detail.tabBeforeOpen = state.tab;
+    state.detail.stack = [];
   } else if (options.pushHistory && state.detail.current) {
     state.detail.stack.push(state.detail.current);
   }
@@ -528,9 +530,26 @@ function openDetailView(type, title, payload, options = { pushHistory: true }) {
   if (type !== "photo") {
     togglePhotoHelp(false);
   }
+  if (el.btnDetailBack) {
+    el.btnDetailBack.disabled = state.detail.stack.length === 0;
+  }
 }
 
-function closeDetailView() {
+function hideDetailView() {
+  state.detail.active = false;
+  state.detail.type = null;
+  state.detail.current = null;
+  state.detail.stack = [];
+  el.main.classList.remove("detail-open");
+  el.detailView.classList.remove("open");
+  el.detailView.setAttribute("aria-hidden", "true");
+  togglePhotoHelp(false);
+  if (el.btnDetailBack) {
+    el.btnDetailBack.disabled = true;
+  }
+}
+
+function goDetailBack() {
   if (state.detail.stack.length > 0) {
     const prev = state.detail.stack.pop();
     if (prev?.type === "album" && prev.payload?.albumId) {
@@ -543,22 +562,18 @@ function closeDetailView() {
     }
   }
 
-  state.detail.active = false;
-  state.detail.type = null;
-  state.detail.current = null;
-  state.detail.stack = [];
-  el.main.classList.remove("detail-open");
-  el.detailView.classList.remove("open");
-  el.detailView.setAttribute("aria-hidden", "true");
-  togglePhotoHelp(false);
+  goDetailUp();
+}
+
+function goDetailUp() {
+  hideDetailView();
 }
 
 function setTab(tab) {
   const valid = ["photos", "albums", "settings", "status"];
   state.tab = valid.includes(tab) ? tab : "photos";
   if (state.detail.active) {
-    state.detail.stack = [];
-    closeDetailView();
+    goDetailUp();
   }
   location.hash = state.tab;
   updateTabUi();
@@ -1498,7 +1513,7 @@ function isTypingTarget(target) {
 
 function onKeydown(event) {
   if (event.key === "Escape" && state.detail.active) {
-    closeDetailView();
+    goDetailBack();
     return;
   }
 
@@ -1572,6 +1587,9 @@ function onKeydown(event) {
 function bindEvents() {
   const sidebarCollapsed = localStorage.getItem("xphoto_sidebar_collapsed") === "1";
   setSidebarCollapsed(sidebarCollapsed);
+  if (el.btnDetailBack) {
+    el.btnDetailBack.disabled = true;
+  }
 
   el.apiBase.value = state.apiBase;
   el.apiBase.addEventListener("change", () => setApiBase(el.apiBase.value.trim()));
@@ -1629,7 +1647,8 @@ function bindEvents() {
   el.btnCancelScan.addEventListener("click", cancelScan);
   el.btnRetryScan.addEventListener("click", retryScan);
 
-  el.btnDetailBack.addEventListener("click", closeDetailView);
+  el.btnDetailBack.addEventListener("click", goDetailBack);
+  el.btnDetailUp.addEventListener("click", goDetailUp);
   el.btnDrawerPrev.addEventListener("click", () => moveDrawerPhoto(-1));
   el.btnDrawerNext.addEventListener("click", () => moveDrawerPhoto(1));
   el.btnSaveRemark.addEventListener("click", saveRemark);
