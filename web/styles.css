@@ -168,6 +168,34 @@ body {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.search-prefix-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.prefix-chip {
+  border: 1px solid rgba(30, 79, 132, 0.25);
+  border-radius: 999px;
+  background: rgba(30, 79, 132, 0.08);
+  color: #1e4f84;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.16rem 0.52rem;
+  cursor: pointer;
+}
+
+.prefix-chip:hover {
+  background: rgba(30, 79, 132, 0.14);
+}
+
+.search-example {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 .search-shell {
   display: flex;
   align-items: center;

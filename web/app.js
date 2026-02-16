@@ -66,6 +66,8 @@ const el = {
 
   photoKeyword: $("photoKeyword"),
   btnQuickSearch: $("btnQuickSearch"),
+  searchPrefixBar: $("searchPrefixBar"),
+  searchExample: $("searchExample"),
   btnReloadAlbumsPhotos: $("btnReloadAlbumsPhotos"),
   latestAlbumsRow: $("latestAlbumsRow"),
   photoAlbumFilter: $("photoAlbumFilter"),
@@ -225,6 +227,31 @@ function formatIsoToSecond(isoText) {
     return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
   }
   return String(isoText).replace("T", " ").slice(0, 19);
+}
+
+function updateSearchExample() {
+  const text = el.photoKeyword.value.trim();
+  if (text.includes("album:")) {
+    el.searchExample.textContent = "示例: album:旅行 date:2025-12";
+    return;
+  }
+  if (text.includes("camera:") || text.includes("lens:")) {
+    el.searchExample.textContent = "示例: camera:iPhone lens:26mm";
+    return;
+  }
+  if (text.includes("remark:")) {
+    el.searchExample.textContent = "示例: remark:周末聚餐";
+    return;
+  }
+  el.searchExample.textContent = "示例: album:旅行 camera:iPhone date:2025-12";
+}
+
+function insertSearchPrefix(prefix) {
+  const current = el.photoKeyword.value;
+  const suffix = current.endsWith(" ") || current.length === 0 ? "" : " ";
+  el.photoKeyword.value = `${current}${suffix}${prefix}`;
+  el.photoKeyword.focus();
+  updateSearchExample();
 }
 
 function setApiBase(value) {
@@ -1551,6 +1578,13 @@ function bindEvents() {
       searchPhotos(event);
     }
   });
+  el.photoKeyword.addEventListener("input", updateSearchExample);
+  el.searchPrefixBar.querySelectorAll("[data-prefix]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const prefix = btn.getAttribute("data-prefix");
+      if (prefix) insertSearchPrefix(prefix);
+    });
+  });
   el.photoAlbumFilter.addEventListener("change", searchPhotos);
   el.photoOrder.addEventListener("change", searchPhotos);
   el.photoStartDate.addEventListener("change", searchPhotos);
@@ -1618,6 +1652,7 @@ async function boot() {
   startTaskAutoRefresh();
   initTabFromHash();
   setTab(state.tab || "photos");
+  updateSearchExample();
   await checkHealth();
   await Promise.all([loadAlbums(), loadSources(), loadTaskOverview(), loadTaskJobs()]);
   syncPhotoFiltersFromForm(false);
