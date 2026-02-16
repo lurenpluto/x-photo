@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    pub root: String,
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
@@ -69,11 +70,12 @@ pub struct AlbumRegexRuleConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            root: default_root_dir().to_string_lossy().to_string(),
             server: ServerConfig {
                 bind_addr: "127.0.0.1:8080".to_string(),
             },
             database: DatabaseConfig {
-                url: "sqlite://xphoto.db".to_string(),
+                url: "sqlite://data/xphoto.db".to_string(),
             },
             logging: LoggingConfig {
                 dir: "logs".to_string(),
@@ -167,11 +169,13 @@ impl Default for AlbumRulesConfig {
 
 pub struct LoadedConfig {
     pub path: String,
+    pub root: String,
     pub config: AppConfig,
 }
 
 pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     let config_path = resolve_config_path();
+    ensure_default_config(&config_path)?;
     let content = std::fs::read_to_string(&config_path).map_err(|e| {
         format!(
             "Could not read config file at {}: {}",
@@ -226,8 +230,44 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
         }
     }
 
+    let resolved_root = resolve_root_dir(&config.root);
+    std::fs::create_dir_all(&resolved_root).map_err(|e| {
+        format!(
+            "Could not create root directory at {}: {}",
+            resolved_root.display(),
+            e
+        )
+    })?;
+
+    if let Some(path) = config.database.url.strip_prefix("sqlite://") {
+        if !path.starts_with('/') {
+            let db_path = resolved_root.join(path);
+            if let Some(parent) = db_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    format!(
+                        "Could not create database parent directory at {}: {}",
+                        parent.display(),
+                        e
+                    )
+                })?;
+            }
+            config.database.url = format!("sqlite://{}", db_path.to_string_lossy());
+        }
+    }
+
+    let log_dir_path = PathBuf::from(&config.logging.dir);
+    if log_dir_path.is_relative() {
+        config.logging.dir = resolved_root
+            .join(log_dir_path)
+            .to_string_lossy()
+            .to_string();
+    }
+
+    config.root = resolved_root.to_string_lossy().to_string();
+
     Ok(LoadedConfig {
         path: config_path.to_string_lossy().to_string(),
+        root: config.root.clone(),
         config,
     })
 }
@@ -244,5 +284,65 @@ fn resolve_config_path() -> PathBuf {
         return PathBuf::from(path);
     }
 
-    PathBuf::from("config/config.toml")
+    default_root_dir().join("config.toml")
+}
+
+fn default_root_dir() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".xphoto");
+    }
+    PathBuf::from(".xphoto")
+}
+
+fn resolve_root_dir(raw_root: &str) -> PathBuf {
+    if let Some(stripped) = raw_root.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(stripped);
+        }
+    }
+    let p = PathBuf::from(raw_root);
+    if p.is_relative() {
+        return default_root_dir().join(p);
+    }
+    p
+}
+
+fn ensure_default_config(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    if path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let default_text = r#"root = "~/.xphoto"
+
+[server]
+bind_addr = "127.0.0.1:8080"
+
+[database]
+url = "sqlite://data/xphoto.db"
+
+[logging]
+dir = "logs"
+level = "info"
+
+[storage]
+allow_delete = false
+
+[scan]
+max_concurrent_jobs = 2
+checkpoint_every = 50
+resume_enabled = true
+task_dispatch_interval_ms = 2000
+task_stale_seconds = 120
+
+[album_rules]
+enabled = true
+date_delimiters = [".", "_", "-"]
+"#;
+
+    std::fs::write(path, default_text)?;
+    Ok(())
 }

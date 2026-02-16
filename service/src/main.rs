@@ -17,6 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!(
         config_path = %loaded.path,
+        config_root = %loaded.root,
         database_url = %database_url,
         bind_addr = %bind_addr,
         log_dir = %cfg.logging.dir,

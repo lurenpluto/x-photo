@@ -1,8 +1,10 @@
+root = "~/.xphoto"
+
 [server]
 bind_addr = "127.0.0.1:8080"
 
 [database]
-url = "sqlite://xphoto.db"
+url = "sqlite://data/xphoto.db"
 
 [logging]
 dir = "logs"
