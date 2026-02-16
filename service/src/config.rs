@@ -293,35 +293,81 @@ fn resolve_config_path() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
     for i in 0..args.len() {
         if args[i] == "--config" && i + 1 < args.len() {
-            return PathBuf::from(&args[i + 1]);
+            return expand_user_home_path(&args[i + 1]);
         }
     }
 
     if let Ok(path) = std::env::var("CONFIG_PATH") {
-        return PathBuf::from(path);
+        return expand_user_home_path(&path);
     }
 
     default_root_dir().join("config.toml")
 }
 
 fn default_root_dir() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".xphoto");
+    if let Some(home) = detect_home_dir() {
+        return home.join(".xphoto");
     }
     PathBuf::from(".xphoto")
 }
 
 fn resolve_root_dir(raw_root: &str) -> PathBuf {
-    if let Some(stripped) = raw_root.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(stripped);
+    if let Some(stripped) = strip_tilde_prefix(raw_root) {
+        if let Some(home) = detect_home_dir() {
+            return home.join(stripped);
         }
+        return PathBuf::from(stripped);
     }
     let p = PathBuf::from(raw_root);
     if p.is_relative() {
         return default_root_dir().join(p);
     }
     p
+}
+
+fn expand_user_home_path(raw: &str) -> PathBuf {
+    if let Some(stripped) = strip_tilde_prefix(raw) {
+        if let Some(home) = detect_home_dir() {
+            return home.join(stripped);
+        }
+        return PathBuf::from(stripped);
+    }
+    PathBuf::from(raw)
+}
+
+fn strip_tilde_prefix(raw: &str) -> Option<&str> {
+    if raw == "~" {
+        return Some("");
+    }
+    raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\"))
+}
+
+fn detect_home_dir() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("HOME") {
+        let trimmed = home.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let trimmed = user_profile.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    let home_drive = std::env::var("HOMEDRIVE").unwrap_or_default();
+    let home_path = std::env::var("HOMEPATH").unwrap_or_default();
+    if !home_drive.trim().is_empty() && !home_path.trim().is_empty() {
+        return Some(PathBuf::from(format!(
+            "{}{}",
+            home_drive.trim(),
+            home_path.trim()
+        )));
+    }
+
+    None
 }
 
 fn ensure_default_config(
