@@ -444,8 +444,8 @@ textarea {
 }
 
 .album-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  display: flex;
+  flex-wrap: nowrap;
   gap: 0.65rem;
   padding-bottom: 0.15rem;
   overflow: hidden;
@@ -458,6 +458,7 @@ textarea {
 }
 
 .album-card {
+  flex: 0 0 230px;
   border: 1px solid rgba(33, 48, 65, 0.14);
   border-radius: 13px;
   padding: 0.4rem;
