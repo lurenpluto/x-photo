@@ -1,12 +1,6 @@
 const state = {
   apiBase: localStorage.getItem("xphoto_api_base") || "http://127.0.0.1:8080/rpc/v1",
-  route: "resources",
-  selectedTaskId: null,
-  selectedTask: null,
-  selectedScanJobId: null,
-  taskStatusFilter: "",
-  taskJobTypeFilter: "",
-  taskTriggerTypeFilter: "",
+  tab: "photos",
   albums: [],
   selectedPhotoId: null,
   selectedPhotoAlbums: [],
@@ -20,6 +14,12 @@ const state = {
     start_time: "",
     end_time: "",
   },
+  selectedTaskId: null,
+  selectedTask: null,
+  selectedScanJobId: null,
+  taskStatusFilter: "",
+  taskJobTypeFilter: "",
+  taskTriggerTypeFilter: "",
   timers: {
     taskAutoRefresh: null,
     taskTickBusy: false,
@@ -29,23 +29,43 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 const el = {
-  apiBase: $("apiBase"),
-  healthStatus: $("healthStatus"),
-  btnHealth: $("btnHealth"),
-  routeNav: $("routeNav"),
+  sideNav: $("sideNav"),
+  tabPhotos: $("tab-photos"),
+  tabAlbums: $("tab-albums"),
+  tabSettings: $("tab-settings"),
+  tabStatus: $("tab-status"),
 
+  photoKeyword: $("photoKeyword"),
+  btnQuickSearch: $("btnQuickSearch"),
+  btnReloadAlbumsPhotos: $("btnReloadAlbumsPhotos"),
+  latestAlbumsRow: $("latestAlbumsRow"),
+  photoAlbumFilter: $("photoAlbumFilter"),
+  photoOrder: $("photoOrder"),
+  photoStartDate: $("photoStartDate"),
+  photoEndDate: $("photoEndDate"),
+  photoPageSize: $("photoPageSize"),
+  photoFilterChips: $("photoFilterChips"),
+  photoMasonry: $("photoMasonry"),
+  photoPageHint: $("photoPageHint"),
+  btnPhotoPrev: $("btnPhotoPrev"),
+  btnPhotoNext: $("btnPhotoNext"),
+
+  btnReloadAlbums: $("btnReloadAlbums"),
+  albumGrid: $("albumGrid"),
+
+  apiBase: $("apiBase"),
+  btnHealth: $("btnHealth"),
+  healthStatus: $("healthStatus"),
   sourceForm: $("sourceForm"),
   sourceName: $("sourceName"),
   sourcePath: $("sourcePath"),
   sourceMessage: $("sourceMessage"),
+  btnReloadSources: $("btnReloadSources"),
   sourceList: $("sourceList"),
   sourceItemTpl: $("sourceItemTpl"),
-  btnReloadSources: $("btnReloadSources"),
-  btnAlbums: $("btnAlbums"),
-  albumList: $("albumList"),
 
-  btnTaskOverview: $("btnTaskOverview"),
   taskAutoRefreshHint: $("taskAutoRefreshHint"),
+  btnTaskOverview: $("btnTaskOverview"),
   taskOverview: $("taskOverview"),
   btnTaskList: $("btnTaskList"),
   taskFilterForm: $("taskFilterForm"),
@@ -61,19 +81,6 @@ const el = {
   btnCancelScan: $("btnCancelScan"),
   btnRetryScan: $("btnRetryScan"),
 
-  photoSearchForm: $("photoSearchForm"),
-  photoKeyword: $("photoKeyword"),
-  photoAlbumFilter: $("photoAlbumFilter"),
-  photoOrder: $("photoOrder"),
-  photoStartDate: $("photoStartDate"),
-  photoEndDate: $("photoEndDate"),
-  photoPageSize: $("photoPageSize"),
-  photoFilterChips: $("photoFilterChips"),
-  photoMeta: $("photoMeta"),
-  photoPageHint: $("photoPageHint"),
-  btnPhotoPrev: $("btnPhotoPrev"),
-  btnPhotoNext: $("btnPhotoNext"),
-  photoGrid: $("photoGrid"),
   photoDrawer: $("photoDrawer"),
   photoDrawerBackdrop: $("photoDrawerBackdrop"),
   btnCloseDrawer: $("btnCloseDrawer"),
@@ -88,28 +95,6 @@ const el = {
   photoDetailMsg: $("photoDetailMsg"),
 };
 
-function setApiBase(value) {
-  state.apiBase = value.replace(/\/$/, "");
-  localStorage.setItem("xphoto_api_base", state.apiBase);
-}
-
-async function api(path, options = {}) {
-  const res = await fetch(`${state.apiBase}${path}`, {
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  const data = await res.json();
-  if (!res.ok || data.code !== 0) {
-    throw new Error(data.message || `HTTP ${res.status}`);
-  }
-  return data.data;
-}
-
-function setHealthText(text, ok = true) {
-  el.healthStatus.textContent = text;
-  el.healthStatus.style.color = ok ? "var(--accent-deep)" : "var(--warning)";
-}
-
 function escapeHtml(s) {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -118,29 +103,56 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;");
 }
 
-function taskTag(status) {
-  const warn = status === "failed" || status === "cancelled";
-  return `<span class="tag ${warn ? "warn" : ""}">${escapeHtml(status)}</span>`;
+function hashNumber(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h;
 }
 
-function setRouteFromHash() {
-  const route = location.hash.replace("#", "") || "resources";
-  const valid = ["resources", "tasks", "photos"];
-  state.route = valid.includes(route) ? route : "resources";
+function photoVisualStyle(photo) {
+  const seed = hashNumber(photo.id || photo.file_path || photo.file_name || "photo");
+  const hueA = seed % 360;
+  const hueB = (hueA + 46 + (seed % 97)) % 360;
+  const height = 150 + (seed % 140);
+  return {
+    height,
+    background: `linear-gradient(145deg, hsl(${hueA} 58% 56%), hsl(${hueB} 62% 42%))`,
+  };
+}
 
-  document.querySelectorAll(".route-section").forEach((sec) => {
-    const active = sec.id === `route-${state.route}`;
-    sec.classList.toggle("active", active);
-  });
+function albumVisualStyle(album) {
+  const seed = hashNumber(album.id || album.name || "album");
+  const hueA = (seed + 24) % 360;
+  const hueB = (hueA + 70) % 360;
+  return {
+    background: `linear-gradient(140deg, hsl(${hueA} 58% 54%), hsl(${hueB} 62% 38%))`,
+  };
+}
 
-  document.querySelectorAll(".route-link").forEach((link) => {
-    const active = link.dataset.route === state.route;
-    link.classList.toggle("active", active);
-  });
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
 
-  if (el.taskAutoRefreshHint) {
-    el.taskAutoRefreshHint.textContent = state.route === "tasks" ? "自动刷新中" : "切到任务中心自动刷新";
-  }
+function formatPhotoGroupLabel(dateText) {
+  if (!dateText || dateText === "未知日期") return "未知日期";
+  const d = new Date(`${dateText}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dateText;
+
+  const today = startOfDay(new Date());
+  const target = startOfDay(d);
+  const diffDays = Math.round((today.getTime() - target.getTime()) / 86400000);
+
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  if (diffDays > 1 && diffDays < 7) return "本周";
+  return dateText;
+}
+
+function setApiBase(value) {
+  state.apiBase = value.replace(/\/$/, "");
+  localStorage.setItem("xphoto_api_base", state.apiBase);
 }
 
 function dateToStartIso(dateValue) {
@@ -158,6 +170,61 @@ function isoToDateInput(iso) {
   return iso.slice(0, 10);
 }
 
+function setHealthText(text, ok = true) {
+  el.healthStatus.textContent = text;
+  el.healthStatus.style.color = ok ? "var(--accent-deep)" : "var(--warning)";
+}
+
+async function api(path, options = {}) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`${state.apiBase}${path}`, {
+      headers: { "content-type": "application/json", ...(options.headers || {}) },
+      signal: controller.signal,
+      ...options,
+    });
+    const data = await res.json();
+    if (!res.ok || data.code !== 0) {
+      throw new Error(data.message || `HTTP ${res.status}`);
+    }
+    return data.data;
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("请求超时，请检查服务地址或网络连通性");
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function updateTabUi() {
+  const tabs = ["photos", "albums", "settings", "status"];
+  for (const tab of tabs) {
+    const panel = $(`tab-${tab}`);
+    if (panel) {
+      panel.classList.toggle("active", state.tab === tab);
+    }
+  }
+  el.sideNav.querySelectorAll("[data-tab]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === state.tab);
+  });
+}
+
+function setTab(tab) {
+  const valid = ["photos", "albums", "settings", "status"];
+  state.tab = valid.includes(tab) ? tab : "photos";
+  location.hash = state.tab;
+  updateTabUi();
+}
+
+function initTabFromHash() {
+  const hashTab = location.hash.replace("#", "");
+  state.tab = hashTab || "photos";
+  updateTabUi();
+}
+
 function readPhotoStateFromUrl() {
   const params = new URLSearchParams(location.search);
   state.photoFilters.keyword = params.get("pk") || "";
@@ -167,7 +234,7 @@ function readPhotoStateFromUrl() {
   state.photoFilters.end_time = params.get("pe") || "";
   state.photoPage = Math.max(1, Number(params.get("pp") || "1") || 1);
 
-  const pageSize = Math.min(100, Math.max(1, Number(params.get("psz") || "24") || 24));
+  const pageSize = Math.min(100, Math.max(1, Number(params.get("psz") || "36") || 36));
   el.photoKeyword.value = state.photoFilters.keyword;
   el.photoOrder.value = state.photoFilters.order;
   el.photoStartDate.value = isoToDateInput(state.photoFilters.start_time);
@@ -178,7 +245,6 @@ function readPhotoStateFromUrl() {
 function writePhotoStateToUrl() {
   const url = new URL(location.href);
   const params = url.searchParams;
-
   const setOrDelete = (key, value) => {
     if (value) {
       params.set(key, value);
@@ -193,18 +259,69 @@ function writePhotoStateToUrl() {
   setOrDelete("ps", state.photoFilters.start_time);
   setOrDelete("pe", state.photoFilters.end_time);
   setOrDelete("pp", String(state.photoPage || 1));
-  setOrDelete("psz", String(Number(el.photoPageSize.value) || 24));
-
+  setOrDelete("psz", String(Number(el.photoPageSize.value) || 36));
   history.replaceState(null, "", url);
 }
 
 async function checkHealth() {
+  setApiBase(el.apiBase.value.trim());
   setHealthText("检查中...");
   try {
     const data = await api("/health", { method: "GET" });
     setHealthText(`服务在线: ${data.status}`);
   } catch (err) {
     setHealthText(`服务不可用: ${err.message}`, false);
+  }
+}
+
+function renderAlbumCards(target, albums) {
+  if (!albums.length) {
+    target.innerHTML = '<p class="hint">暂无相册。</p>';
+    return;
+  }
+  target.innerHTML = albums
+    .map(
+      (a) => {
+        const visual = albumVisualStyle(a);
+        const title = a.name || "未命名相册";
+        const timeLabel = (a.created_at || "").slice(0, 10) || "-";
+        return `
+      <article class="album-card">
+        <div class="album-cover" style="background:${visual.background};">
+          <p class="item-title">${escapeHtml(title)}</p>
+        </div>
+        <p class="item-sub">${escapeHtml(timeLabel)} · ${a.auto_created ? "自动" : "手动"} · ${a.id.slice(0, 10)}...</p>
+      </article>
+    `;
+      },
+    )
+    .join("");
+}
+
+async function loadAlbums() {
+  el.latestAlbumsRow.innerHTML = '<div class="loading">加载最新相册...</div>';
+  if (state.tab === "albums") {
+    el.albumGrid.innerHTML = '<div class="loading">加载相册列表...</div>';
+  }
+  try {
+    state.albums = await api("/albums", { method: "GET" });
+    renderAlbumCards(el.albumGrid, state.albums);
+    renderAlbumCards(el.latestAlbumsRow, state.albums.slice(0, 8));
+
+    el.photoAlbumSelect.innerHTML = state.albums.length
+      ? state.albums.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("")
+      : '<option value="">无可选相册</option>';
+
+    el.photoAlbumFilter.innerHTML =
+      '<option value="">全部相册</option>' +
+      state.albums.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
+
+    if (state.photoFilters.album_id) {
+      el.photoAlbumFilter.value = state.photoFilters.album_id;
+    }
+  } catch (err) {
+    el.albumGrid.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
+    el.latestAlbumsRow.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
   }
 }
 
@@ -267,43 +384,176 @@ async function createSource(event) {
   }
 }
 
-async function loadAlbums() {
-  try {
-    state.albums = await api("/albums", { method: "GET" });
-    if (!state.albums.length) {
-      el.albumList.innerHTML = '<p class="hint">暂无相册。</p>';
-      el.photoAlbumSelect.innerHTML = '<option value="">无可选相册</option>';
-      el.photoAlbumFilter.innerHTML = '<option value="">全部相册</option>';
-      return;
-    }
-    el.albumList.innerHTML = state.albums
-      .map(
-        (a) => `
-      <div class="list-item">
-        <div>
-          <p class="item-title">${escapeHtml(a.name)}</p>
-          <p class="item-sub">id: ${a.id.slice(0, 14)}... · auto: ${a.auto_created ? "yes" : "no"}</p>
-        </div>
-        <span class="tag">album</span>
-      </div>
-    `,
-      )
-      .join("");
-
-    el.photoAlbumSelect.innerHTML = state.albums
-      .map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`)
-      .join("");
-
-    el.photoAlbumFilter.innerHTML =
-      '<option value="">全部相册</option>' +
-      state.albums.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
-
-    if (state.photoFilters.album_id) {
-      el.photoAlbumFilter.value = state.photoFilters.album_id;
-    }
-  } catch (err) {
-    el.albumList.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
+function renderPhotoFilterChips() {
+  const chips = [];
+  if (state.photoFilters.keyword) {
+    chips.push(`关键词: ${escapeHtml(state.photoFilters.keyword)}`);
   }
+  if (state.photoFilters.album_id) {
+    const album = state.albums.find((a) => a.id === state.photoFilters.album_id);
+    chips.push(`相册: ${escapeHtml(album ? album.name : state.photoFilters.album_id)}`);
+  }
+  chips.push(state.photoFilters.order === "asc" ? "排序: 时间正序" : "排序: 时间倒序");
+  if (state.photoFilters.start_time) {
+    chips.push(`开始: ${escapeHtml(state.photoFilters.start_time.slice(0, 10))}`);
+  }
+  if (state.photoFilters.end_time) {
+    chips.push(`结束: ${escapeHtml(state.photoFilters.end_time.slice(0, 10))}`);
+  }
+  el.photoFilterChips.innerHTML = chips.map((txt) => `<span class="chip">${txt}</span>`).join("");
+}
+
+function renderPhotos(data) {
+  const items = data.items || [];
+  state.photoItems = items.map((p) => p.id);
+  state.photoTotal = data.total ?? 0;
+  state.photoPage = data.page ?? 1;
+
+  const pageSize = Number(el.photoPageSize.value) || 36;
+  const totalPages = Math.max(1, Math.ceil(state.photoTotal / pageSize));
+  el.photoPageHint.textContent = `第 ${state.photoPage} / ${totalPages} 页 · 共 ${state.photoTotal} 张`;
+  el.btnPhotoPrev.disabled = state.photoPage <= 1;
+  el.btnPhotoNext.disabled = state.photoPage >= totalPages;
+  renderPhotoFilterChips();
+  writePhotoStateToUrl();
+
+  if (!items.length) {
+    el.photoMasonry.innerHTML = '<p class="hint">没有匹配结果。</p>';
+    return;
+  }
+
+  const groups = new Map();
+  for (const p of items) {
+    const key = (p.sort_time || "").slice(0, 10) || "未知日期";
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(p);
+  }
+
+  const groupKeys = Array.from(groups.keys());
+  el.photoMasonry.innerHTML = groupKeys
+    .map((key) => {
+      const photos = groups.get(key) || [];
+      const cards = photos
+        .map((p) => {
+          const visual = photoVisualStyle(p);
+          return `
+        <article class="photo-card" data-photo-id="${p.id}">
+          <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+            <div class="photo-title">${escapeHtml(p.file_name)}</div>
+          </div>
+          <p class="item-sub">${escapeHtml(p.file_path)}</p>
+          <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
+        </article>
+      `;
+        })
+        .join("");
+      return `
+      <section class="photo-group">
+        <h3>${escapeHtml(formatPhotoGroupLabel(key))} <span class="hint">${escapeHtml(key)}</span></h3>
+        <div class="masonry-grid">${cards}</div>
+      </section>
+    `;
+    })
+    .join("");
+
+  el.photoMasonry.querySelectorAll("[data-photo-id]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const photoId = card.getAttribute("data-photo-id");
+      if (photoId) openPhotoDrawer(photoId);
+    });
+  });
+}
+
+function bindHorizontalDragScroll(container) {
+  let down = false;
+  let startX = 0;
+  let startScroll = 0;
+
+  container.addEventListener("mousedown", (event) => {
+    down = true;
+    container.classList.add("dragging");
+    startX = event.clientX;
+    startScroll = container.scrollLeft;
+  });
+
+  container.addEventListener("mouseleave", () => {
+    down = false;
+    container.classList.remove("dragging");
+  });
+
+  container.addEventListener("mouseup", () => {
+    down = false;
+    container.classList.remove("dragging");
+  });
+
+  container.addEventListener("mousemove", (event) => {
+    if (!down) return;
+    const delta = event.clientX - startX;
+    container.scrollLeft = startScroll - delta;
+  });
+
+  container.addEventListener(
+    "wheel",
+    (event) => {
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      container.scrollLeft += event.deltaY;
+    },
+    { passive: false },
+  );
+}
+
+function syncPhotoFiltersFromForm(resetPage = false) {
+  state.photoFilters.keyword = el.photoKeyword.value.trim();
+  state.photoFilters.album_id = el.photoAlbumFilter.value;
+  state.photoFilters.order = el.photoOrder.value || "desc";
+  state.photoFilters.start_time = dateToStartIso(el.photoStartDate.value);
+  state.photoFilters.end_time = dateToEndIso(el.photoEndDate.value);
+  if (resetPage) {
+    state.photoPage = 1;
+  }
+}
+
+async function fetchAndRenderPhotos() {
+  el.photoMasonry.innerHTML = '<div class="loading">加载照片中...</div>';
+  try {
+    const data = await api("/photos/search", {
+      method: "POST",
+      body: JSON.stringify({
+        keyword: state.photoFilters.keyword || undefined,
+        album_id: state.photoFilters.album_id || undefined,
+        order: state.photoFilters.order || "desc",
+        start_time: state.photoFilters.start_time || undefined,
+        end_time: state.photoFilters.end_time || undefined,
+        page: state.photoPage,
+        page_size: Number(el.photoPageSize.value) || 36,
+      }),
+    });
+    renderPhotos(data);
+  } catch (err) {
+    el.photoMasonry.innerHTML = `<p class="hint">检索失败: ${escapeHtml(err.message)}</p>`;
+    state.photoItems = [];
+  }
+}
+
+async function searchPhotos(event) {
+  if (event) event.preventDefault();
+  syncPhotoFiltersFromForm(true);
+  await fetchAndRenderPhotos();
+}
+
+async function loadPhotoPage(page) {
+  const pageSize = Number(el.photoPageSize.value) || 36;
+  const totalPages = Math.max(1, Math.ceil(state.photoTotal / pageSize));
+  state.photoPage = Math.max(1, Math.min(totalPages, page));
+  await fetchAndRenderPhotos();
+}
+
+function taskTag(status) {
+  const warn = status === "failed" || status === "cancelled";
+  return `<span class="tag ${warn ? "warn" : ""}">${escapeHtml(status)}</span>`;
 }
 
 function renderTaskOverview(data) {
@@ -359,6 +609,7 @@ function renderTaskList(items) {
     el.taskList.innerHTML = '<p class="hint">当前条件下无任务。</p>';
     return;
   }
+
   el.taskList.innerHTML = items
     .map(
       (task) => `
@@ -393,9 +644,11 @@ async function loadTaskJobs(event) {
     state.taskJobTypeFilter = jobType;
     state.taskTriggerTypeFilter = triggerType;
     state.taskStatusFilter = status;
+
     const query = new URLSearchParams({ page: "1", page_size: "50" });
     if (jobType) query.set("job_type", jobType);
     if (status) query.set("status", status);
+
     const data = await api(`/task-jobs?${query.toString()}`, { method: "GET" });
     let items = data.items || [];
     if (triggerType) {
@@ -411,7 +664,6 @@ function renderTaskFlow(status) {
   const steps = ["pending", "running", "success"];
   if (status === "failed") steps[2] = "failed";
   if (status === "cancelled") steps[2] = "cancelled";
-
   const currentIdx = steps.indexOf(status);
   el.taskFlow.innerHTML = steps
     .map((step, idx) => {
@@ -451,6 +703,7 @@ async function loadTaskDetail(taskId) {
     state.selectedScanJobId = task.scan_job_id || null;
     el.taskDetailHint.textContent = `任务 ${task.id.slice(0, 12)}...`;
     renderTaskFlow(task.status);
+
     el.taskDetail.innerHTML = [
       ["task_id", task.id],
       ["status", task.status],
@@ -516,116 +769,6 @@ async function retryScan() {
   }
 }
 
-function renderPhotos(data) {
-  const items = data.items || [];
-  state.photoItems = items.map((p) => p.id);
-  state.photoTotal = data.total ?? 0;
-  state.photoPage = data.page ?? 1;
-  const pageSize = Number(el.photoPageSize.value) || 24;
-  const totalPages = Math.max(1, Math.ceil(state.photoTotal / pageSize));
-
-  el.photoMeta.textContent = `共 ${state.photoTotal} 张，当前页 ${state.photoPage} / ${totalPages}`;
-  el.photoPageHint.textContent = `第 ${state.photoPage} 页`;
-  el.btnPhotoPrev.disabled = state.photoPage <= 1;
-  el.btnPhotoNext.disabled = state.photoPage >= totalPages;
-  renderPhotoFilterChips();
-  writePhotoStateToUrl();
-
-  if (!items.length) {
-    el.photoGrid.innerHTML = '<p class="hint">没有匹配结果。</p>';
-    return;
-  }
-  el.photoGrid.innerHTML = items
-    .map(
-      (p) => `
-      <article class="photo-card clickable" data-photo-id="${p.id}">
-        <p class="name">${escapeHtml(p.file_name)}</p>
-        <p class="item-sub">${escapeHtml(p.file_path)}</p>
-        <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
-      </article>
-    `,
-    )
-    .join("");
-
-  el.photoGrid.querySelectorAll("[data-photo-id]").forEach((card) => {
-    card.addEventListener("click", () => {
-      const photoId = card.getAttribute("data-photo-id");
-      if (photoId) openPhotoDrawer(photoId);
-    });
-  });
-}
-
-function renderPhotoFilterChips() {
-  const chips = [];
-  if (state.photoFilters.keyword) {
-    chips.push(`关键词: ${escapeHtml(state.photoFilters.keyword)}`);
-  }
-  if (state.photoFilters.album_id) {
-    const album = state.albums.find((a) => a.id === state.photoFilters.album_id);
-    chips.push(`相册: ${escapeHtml(album ? album.name : state.photoFilters.album_id)}`);
-  }
-  if (state.photoFilters.order === "asc") {
-    chips.push("排序: 时间正序");
-  } else {
-    chips.push("排序: 时间倒序");
-  }
-  if (state.photoFilters.start_time) {
-    chips.push(`开始: ${escapeHtml(state.photoFilters.start_time.slice(0, 10))}`);
-  }
-  if (state.photoFilters.end_time) {
-    chips.push(`结束: ${escapeHtml(state.photoFilters.end_time.slice(0, 10))}`);
-  }
-
-  el.photoFilterChips.innerHTML = chips.map((txt) => `<span class="chip">${txt}</span>`).join("");
-}
-
-function syncPhotoFiltersFromForm(resetPage = false) {
-  state.photoFilters.keyword = el.photoKeyword.value.trim();
-  state.photoFilters.album_id = el.photoAlbumFilter.value;
-  state.photoFilters.order = el.photoOrder.value || "desc";
-  state.photoFilters.start_time = dateToStartIso(el.photoStartDate.value);
-  state.photoFilters.end_time = dateToEndIso(el.photoEndDate.value);
-  if (resetPage) {
-    state.photoPage = 1;
-  }
-}
-
-async function searchPhotos(event) {
-  if (event) event.preventDefault();
-  syncPhotoFiltersFromForm(true);
-  await fetchAndRenderPhotos();
-}
-
-async function fetchAndRenderPhotos() {
-  try {
-    const data = await api("/photos/search", {
-      method: "POST",
-      body: JSON.stringify({
-        keyword: state.photoFilters.keyword || undefined,
-        album_id: state.photoFilters.album_id || undefined,
-        order: state.photoFilters.order || "desc",
-        start_time: state.photoFilters.start_time || undefined,
-        end_time: state.photoFilters.end_time || undefined,
-        page: state.photoPage,
-        page_size: Number(el.photoPageSize.value) || 24,
-      }),
-    });
-    renderPhotos(data);
-  } catch (err) {
-    el.photoMeta.textContent = `检索失败: ${err.message}`;
-    el.photoGrid.innerHTML = "";
-    state.photoItems = [];
-  }
-}
-
-async function loadPhotoPage(page) {
-  const pageSize = Number(el.photoPageSize.value) || 24;
-  const totalPages = Math.max(1, Math.ceil(state.photoTotal / pageSize));
-  const targetPage = Math.max(1, Math.min(totalPages, page));
-  state.photoPage = targetPage;
-  await fetchAndRenderPhotos();
-}
-
 function openDrawer() {
   el.photoDrawer.classList.add("open");
   el.photoDrawer.setAttribute("aria-hidden", "false");
@@ -657,6 +800,21 @@ function moveDrawerPhoto(step) {
   }
 }
 
+async function removePhotoFromAlbum(albumId) {
+  if (!state.selectedPhotoId) return;
+  el.photoDetailMsg.textContent = "移除中...";
+  try {
+    await api(`/albums/${albumId}/photos:remove`, {
+      method: "POST",
+      body: JSON.stringify({ photo_ids: [state.selectedPhotoId] }),
+    });
+    el.photoDetailMsg.textContent = "已从相册移除";
+    await openPhotoDrawer(state.selectedPhotoId);
+  } catch (err) {
+    el.photoDetailMsg.textContent = `移除失败: ${err.message}`;
+  }
+}
+
 async function openPhotoDrawer(photoId) {
   state.selectedPhotoId = photoId;
   el.photoDetailMsg.textContent = "加载详情...";
@@ -677,7 +835,7 @@ async function openPhotoDrawer(photoId) {
     ]
       .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v || "-")}</p>`)
       .join("");
-    el.photoRemark.value = p.remark || "";
+
     if (!state.selectedPhotoAlbums.length) {
       el.photoAlbums.innerHTML = '<span class="hint">未加入任何相册</span>';
     } else {
@@ -694,25 +852,12 @@ async function openPhotoDrawer(photoId) {
         });
       });
     }
+
+    el.photoRemark.value = p.remark || "";
     el.photoDetailMsg.textContent = "";
     updateDrawerNavButtons();
   } catch (err) {
     el.photoDetailMsg.textContent = `详情加载失败: ${err.message}`;
-  }
-}
-
-async function removePhotoFromAlbum(albumId) {
-  if (!state.selectedPhotoId) return;
-  el.photoDetailMsg.textContent = "移除中...";
-  try {
-    await api(`/albums/${albumId}/photos:remove`, {
-      method: "POST",
-      body: JSON.stringify({ photo_ids: [state.selectedPhotoId] }),
-    });
-    el.photoDetailMsg.textContent = "已从相册移除";
-    await openPhotoDrawer(state.selectedPhotoId);
-  } catch (err) {
-    el.photoDetailMsg.textContent = `移除失败: ${err.message}`;
   }
 }
 
@@ -725,7 +870,7 @@ async function saveRemark() {
       body: JSON.stringify({ remark: el.photoRemark.value }),
     });
     el.photoDetailMsg.textContent = "备注已保存";
-    await searchPhotos();
+    await fetchAndRenderPhotos();
   } catch (err) {
     el.photoDetailMsg.textContent = `保存失败: ${err.message}`;
   }
@@ -754,7 +899,7 @@ async function addPhotoToAlbum() {
 function startTaskAutoRefresh() {
   if (state.timers.taskAutoRefresh) return;
   state.timers.taskAutoRefresh = window.setInterval(async () => {
-    if (state.route !== "tasks" || state.timers.taskTickBusy) return;
+    if (state.tab !== "status" || state.timers.taskTickBusy) return;
     state.timers.taskTickBusy = true;
     try {
       await Promise.all([loadTaskOverview(), loadTaskJobs()]);
@@ -775,15 +920,12 @@ function isTypingTarget(target) {
 }
 
 function onKeydown(event) {
-  if (state.route !== "photos") {
-    if (event.key === "Escape" && isDrawerOpen()) {
-      closeDrawer();
-    }
+  if (event.key === "Escape" && isDrawerOpen()) {
+    closeDrawer();
     return;
   }
 
-  if (event.key === "Escape" && isDrawerOpen()) {
-    closeDrawer();
+  if (state.tab !== "photos") {
     return;
   }
 
@@ -821,16 +963,42 @@ function bindEvents() {
   el.apiBase.value = state.apiBase;
   el.apiBase.addEventListener("change", () => setApiBase(el.apiBase.value.trim()));
   el.btnHealth.addEventListener("click", checkHealth);
-  window.addEventListener("hashchange", setRouteFromHash);
-  el.routeNav.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLAnchorElement)) return;
-    setTimeout(setRouteFromHash, 0);
+
+  window.addEventListener("hashchange", () => {
+    const hashTab = location.hash.replace("#", "") || "photos";
+    setTab(hashTab);
   });
+
+  el.sideNav.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const btn = target.closest("button[data-tab]");
+    if (!(btn instanceof HTMLButtonElement)) return;
+    const tab = btn.dataset.tab;
+    if (tab) {
+      setTab(tab);
+    }
+  });
+
+  el.btnQuickSearch.addEventListener("click", searchPhotos);
+  el.photoKeyword.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      searchPhotos(event);
+    }
+  });
+  el.photoAlbumFilter.addEventListener("change", searchPhotos);
+  el.photoOrder.addEventListener("change", searchPhotos);
+  el.photoStartDate.addEventListener("change", searchPhotos);
+  el.photoEndDate.addEventListener("change", searchPhotos);
+  el.photoPageSize.addEventListener("change", searchPhotos);
+  el.btnPhotoPrev.addEventListener("click", () => loadPhotoPage(state.photoPage - 1));
+  el.btnPhotoNext.addEventListener("click", () => loadPhotoPage(state.photoPage + 1));
+
+  el.btnReloadAlbumsPhotos.addEventListener("click", loadAlbums);
+  el.btnReloadAlbums.addEventListener("click", loadAlbums);
 
   el.sourceForm.addEventListener("submit", createSource);
   el.btnReloadSources.addEventListener("click", loadSources);
-  el.btnAlbums.addEventListener("click", loadAlbums);
 
   el.btnTaskOverview.addEventListener("click", loadTaskOverview);
   el.btnTaskList.addEventListener("click", loadTaskJobs);
@@ -840,30 +1008,25 @@ function bindEvents() {
   el.btnCancelScan.addEventListener("click", cancelScan);
   el.btnRetryScan.addEventListener("click", retryScan);
 
-  el.photoSearchForm.addEventListener("submit", searchPhotos);
-  el.photoAlbumFilter.addEventListener("change", searchPhotos);
-  el.photoOrder.addEventListener("change", searchPhotos);
-  el.photoStartDate.addEventListener("change", searchPhotos);
-  el.photoEndDate.addEventListener("change", searchPhotos);
-  el.photoPageSize.addEventListener("change", searchPhotos);
-  el.btnPhotoPrev.addEventListener("click", () => loadPhotoPage(state.photoPage - 1));
-  el.btnPhotoNext.addEventListener("click", () => loadPhotoPage(state.photoPage + 1));
   el.btnCloseDrawer.addEventListener("click", closeDrawer);
   el.btnDrawerPrev.addEventListener("click", () => moveDrawerPhoto(-1));
   el.btnDrawerNext.addEventListener("click", () => moveDrawerPhoto(1));
   el.photoDrawerBackdrop.addEventListener("click", closeDrawer);
   el.btnSaveRemark.addEventListener("click", saveRemark);
   el.btnAddToAlbum.addEventListener("click", addPhotoToAlbum);
+
   document.addEventListener("keydown", onKeydown);
+  bindHorizontalDragScroll(el.latestAlbumsRow);
 }
 
 async function boot() {
   readPhotoStateFromUrl();
   bindEvents();
   startTaskAutoRefresh();
-  setRouteFromHash();
+  initTabFromHash();
+  setTab(state.tab || "photos");
   await checkHealth();
-  await Promise.all([loadSources(), loadAlbums(), loadTaskOverview(), loadTaskJobs()]);
+  await Promise.all([loadAlbums(), loadSources(), loadTaskOverview(), loadTaskJobs()]);
   syncPhotoFiltersFromForm(false);
   await fetchAndRenderPhotos();
 }

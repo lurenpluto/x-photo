@@ -3,152 +3,182 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>X-Photo Console</title>
+    <title>X-Photo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div class="bg-noise"></div>
-    <main class="page">
-      <section class="hero panel">
-        <div>
-          <p class="eyebrow">X-PHOTO V1</p>
-          <h1>前端控制台</h1>
-          <p class="subtitle">按“资源管理 → 任务中心 → 照片浏览”推进联调与产品化设计。</p>
+    <div class="layout">
+      <aside class="sidebar panel">
+        <div class="brand">
+          <p class="eyebrow">X-PHOTO</p>
+          <h1>控制台</h1>
         </div>
-        <div class="hero-side">
-          <label for="apiBase">API Base</label>
-          <input id="apiBase" value="http://127.0.0.1:8080/rpc/v1" />
-          <button id="btnHealth" class="btn">检查服务健康</button>
-          <p id="healthStatus" class="hint">等待检查...</p>
-        </div>
-      </section>
 
-      <nav class="route-nav panel reveal" id="routeNav">
-        <a href="#resources" data-route="resources" class="route-link">资源管理</a>
-        <a href="#tasks" data-route="tasks" class="route-link">任务中心</a>
-        <a href="#photos" data-route="photos" class="route-link">照片浏览</a>
-      </nav>
+        <nav class="side-nav" id="sideNav">
+          <p class="side-group">媒体</p>
+          <button class="nav-btn active" data-tab="photos">
+            <span class="nav-icon"><img src="./icons/photos.svg" alt="" /></span><span>照片</span>
+          </button>
+          <button class="nav-btn" data-tab="albums">
+            <span class="nav-icon"><img src="./icons/albums.svg" alt="" /></span><span>相册</span>
+          </button>
 
-      <section id="route-resources" class="route-section">
-        <section class="grid-2">
-          <article class="panel reveal">
-            <h2>Source 管理</h2>
-            <form id="sourceForm" class="form">
+          <p class="side-group">系统</p>
+          <button class="nav-btn" data-tab="settings">
+            <span class="nav-icon"><img src="./icons/settings.svg" alt="" /></span><span>设置</span>
+          </button>
+          <button class="nav-btn" data-tab="status">
+            <span class="nav-icon"><img src="./icons/status.svg" alt="" /></span><span>状态</span>
+          </button>
+        </nav>
+
+        <p class="hint">默认展示最新照片，设置与状态拆分在独立标签页。</p>
+      </aside>
+
+      <main class="main">
+        <section class="topbar panel">
+          <div class="search-shell">
+            <span class="search-icon"><img src="./icons/search.svg" alt="" /></span>
+            <input id="photoKeyword" placeholder="搜索照片关键词（文件名/备注）" />
+          </div>
+          <button id="btnQuickSearch" class="btn">搜索</button>
+        </section>
+
+        <section id="tab-photos" class="tab-panel active">
+          <article class="panel">
+            <div class="panel-title">
+              <h2>最新相册</h2>
+              <button id="btnReloadAlbumsPhotos" class="btn ghost">刷新</button>
+            </div>
+            <div id="latestAlbumsRow" class="album-row"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-title">
+              <h2>最新照片</h2>
+              <div class="title-actions">
+                <select id="photoAlbumFilter">
+                  <option value="">全部相册</option>
+                </select>
+                <select id="photoOrder">
+                  <option value="desc">时间倒序</option>
+                  <option value="asc">时间正序</option>
+                </select>
+                <input id="photoStartDate" type="date" />
+                <input id="photoEndDate" type="date" />
+                <input id="photoPageSize" type="number" min="1" max="100" value="36" />
+              </div>
+            </div>
+            <div id="photoFilterChips" class="chips"></div>
+            <div id="photoMasonry" class="masonry"></div>
+            <div class="pager">
+              <button id="btnPhotoPrev" class="btn ghost small" type="button">上一页</button>
+              <span id="photoPageHint" class="hint">第 1 页</span>
+              <button id="btnPhotoNext" class="btn ghost small" type="button">下一页</button>
+            </div>
+          </article>
+        </section>
+
+        <section id="tab-albums" class="tab-panel">
+          <article class="panel">
+            <div class="panel-title">
+              <h2>相册</h2>
+              <button id="btnReloadAlbums" class="btn ghost">刷新</button>
+            </div>
+            <div id="albumGrid" class="album-grid"></div>
+          </article>
+        </section>
+
+        <section id="tab-settings" class="tab-panel">
+          <article class="panel">
+            <div class="panel-title">
+              <h2>连接设置</h2>
+            </div>
+            <div class="settings-grid">
+              <label for="apiBase">API Base</label>
+              <input id="apiBase" value="http://127.0.0.1:8080/rpc/v1" />
+              <button id="btnHealth" class="btn">检查服务健康</button>
+              <p id="healthStatus" class="hint">等待检查...</p>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-title">
+              <h2>Source 设置</h2>
+              <button id="btnReloadSources" class="btn ghost">刷新</button>
+            </div>
+            <form id="sourceForm" class="settings-grid">
               <label for="sourceName">名称</label>
               <input id="sourceName" placeholder="例如：家庭照片盘" required />
               <label for="sourcePath">路径</label>
               <input id="sourcePath" placeholder="例如：/tmp/xphoto_test_data" required />
               <button class="btn" type="submit">创建 Source</button>
+              <p id="sourceMessage" class="hint"></p>
             </form>
-            <p id="sourceMessage" class="hint"></p>
-          </article>
-
-          <article class="panel reveal delay-1">
-            <div class="panel-title">
-              <h2>Source 列表</h2>
-              <button id="btnReloadSources" class="btn ghost">刷新</button>
-            </div>
             <div id="sourceList" class="list"></div>
           </article>
         </section>
 
-        <section class="panel reveal delay-2">
-          <div class="panel-title">
-            <h2>相册列表</h2>
-            <button id="btnAlbums" class="btn ghost">刷新</button>
-          </div>
-          <div id="albumList" class="list"></div>
-        </section>
-      </section>
-
-      <section id="route-tasks" class="route-section">
-        <section class="grid-2">
-          <article class="panel reveal">
-          <div class="panel-title">
-            <h2>任务总览</h2>
-            <div class="title-actions">
-              <span id="taskAutoRefreshHint" class="hint">自动刷新中</span>
-              <button id="btnTaskOverview" class="btn ghost">刷新</button>
-            </div>
-          </div>
-            <div id="taskOverview" class="list"></div>
-          </article>
-
-          <article class="panel reveal delay-1">
-            <div class="panel-title">
-              <h2>任务列表</h2>
-              <button id="btnTaskList" class="btn ghost">刷新</button>
-            </div>
-            <form id="taskFilterForm" class="inline-form task-filters compact">
-              <input id="taskJobType" placeholder="job_type，如 scan" />
-              <input id="taskTriggerType" placeholder="trigger_type，如 manual" />
-              <input id="taskStatus" placeholder="状态过滤，如 running" />
-              <button class="btn" type="submit">筛选</button>
-            </form>
-            <div id="taskList" class="list"></div>
-          </article>
-        </section>
-
-        <section class="panel reveal delay-2">
-          <div class="panel-title">
-            <h2>任务详情</h2>
-            <span id="taskDetailHint" class="hint">请选择一个任务</span>
-          </div>
-          <div class="task-detail-grid">
-            <article>
-              <h3>状态流</h3>
-              <ol id="taskFlow" class="flow"></ol>
-            </article>
-            <article>
-              <h3>详细信息</h3>
-              <div id="taskDetail" class="kv"></div>
-              <div class="task-actions">
-                <button id="btnCancelTask" class="btn ghost" disabled>取消任务</button>
-                <button id="btnRetryTask" class="btn" disabled>重试任务</button>
-                <button id="btnCancelScan" class="btn ghost" disabled>取消扫描</button>
-                <button id="btnRetryScan" class="btn" disabled>重试扫描</button>
+        <section id="tab-status" class="tab-panel">
+          <div class="grid-2">
+            <article class="panel">
+              <div class="panel-title">
+                <h2>任务总览</h2>
+                <div class="title-actions">
+                  <span id="taskAutoRefreshHint" class="hint">自动刷新中</span>
+                  <button id="btnTaskOverview" class="btn ghost">刷新</button>
+                </div>
               </div>
+              <div id="taskOverview" class="list"></div>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h2>任务列表</h2>
+                <button id="btnTaskList" class="btn ghost">刷新</button>
+              </div>
+              <form id="taskFilterForm" class="inline-form task-filters compact">
+                <input id="taskJobType" placeholder="job_type，如 scan" />
+                <input id="taskTriggerType" placeholder="trigger_type，如 manual" />
+                <input id="taskStatus" placeholder="状态过滤，如 running" />
+                <button class="btn" type="submit">筛选</button>
+              </form>
+              <div id="taskList" class="list"></div>
             </article>
           </div>
-        </section>
-      </section>
 
-      <section id="route-photos" class="route-section">
-        <section class="panel reveal">
-          <div class="panel-title">
-            <h2>照片检索</h2>
-          </div>
-          <form id="photoSearchForm" class="inline-form photo-search">
-            <input id="photoKeyword" placeholder="关键词（文件名 / 备注）" />
-            <select id="photoAlbumFilter">
-              <option value="">全部相册</option>
-            </select>
-            <select id="photoOrder">
-              <option value="desc">时间倒序</option>
-              <option value="asc">时间正序</option>
-            </select>
-            <input id="photoStartDate" type="date" />
-            <input id="photoEndDate" type="date" />
-            <input id="photoPageSize" type="number" min="1" max="100" value="24" />
-            <button class="btn" type="submit">搜索</button>
-          </form>
-          <div id="photoFilterChips" class="chips"></div>
-          <p id="photoMeta" class="hint"></p>
-          <div class="pager">
-            <button id="btnPhotoPrev" class="btn ghost small" type="button">上一页</button>
-            <span id="photoPageHint" class="hint">第 1 页</span>
-            <button id="btnPhotoNext" class="btn ghost small" type="button">下一页</button>
-          </div>
-          <div id="photoGrid" class="photo-grid"></div>
+          <article class="panel">
+            <div class="panel-title">
+              <h2>任务详情</h2>
+              <span id="taskDetailHint" class="hint">请选择一个任务</span>
+            </div>
+            <div class="task-detail-grid">
+              <article>
+                <h3>状态流</h3>
+                <ol id="taskFlow" class="flow"></ol>
+              </article>
+              <article>
+                <h3>详细信息</h3>
+                <div id="taskDetail" class="kv"></div>
+                <div class="task-actions">
+                  <button id="btnCancelTask" class="btn ghost" disabled>取消任务</button>
+                  <button id="btnRetryTask" class="btn" disabled>重试任务</button>
+                  <button id="btnCancelScan" class="btn ghost" disabled>取消扫描</button>
+                  <button id="btnRetryScan" class="btn" disabled>重试扫描</button>
+                </div>
+              </article>
+            </div>
+          </article>
         </section>
-      </section>
-    </main>
+      </main>
+    </div>
 
     <aside id="photoDrawer" class="drawer" aria-hidden="true">
       <div class="drawer-backdrop" id="photoDrawerBackdrop"></div>
@@ -166,12 +196,12 @@
           <h3>所在相册</h3>
           <div id="photoAlbums" class="chips"></div>
         </div>
-        <div class="form">
+        <div class="settings-grid">
           <label for="photoRemark">备注</label>
           <textarea id="photoRemark" rows="3" placeholder="输入备注"></textarea>
           <button id="btnSaveRemark" class="btn">保存备注</button>
         </div>
-        <div class="form">
+        <div class="settings-grid">
           <label for="photoAlbumSelect">加入相册</label>
           <select id="photoAlbumSelect"></select>
           <button id="btnAddToAlbum" class="btn">加入相册</button>
