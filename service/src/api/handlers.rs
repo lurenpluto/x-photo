@@ -2980,7 +2980,7 @@ async fn run_scan_job(
             let total_count = collect_target_count;
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
-            let mut touched_photo_ids: HashSet<String> = HashSet::new();
+            let mut pending_index_photo_ids: HashSet<String> = HashSet::new();
             let mut last_scanned_path: Option<String> = None;
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
@@ -3191,8 +3191,6 @@ async fn run_scan_job(
                                 ));
                             }
                         } else {
-                            touched_photo_ids.insert(photo_id.clone());
-
                             match ensure_album_by_dir_rule(
                                 &pool,
                                 &source.id,
@@ -3222,6 +3220,8 @@ async fn run_scan_job(
                                     }
                                 }
                             }
+
+                            pending_index_photo_ids.insert(photo_id);
                         }
                     }
                     Err(e) => {
@@ -3257,13 +3257,22 @@ async fn run_scan_job(
                         &stage,
                     )
                     .await?;
+
+                    if !pending_index_photo_ids.is_empty() {
+                        let ids = pending_index_photo_ids.iter().cloned().collect::<Vec<_>>();
+                        if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
+                            warn!(job_id, source_id = source.id, error = %e, "failed to refresh incremental photo search index");
+                        } else {
+                            pending_index_photo_ids.clear();
+                        }
+                    }
                 }
             }
 
-            if !touched_photo_ids.is_empty() {
-                let touched = touched_photo_ids.into_iter().collect::<Vec<_>>();
-                if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &touched).await {
-                    warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for touched photos");
+            if !pending_index_photo_ids.is_empty() {
+                let ids = pending_index_photo_ids.into_iter().collect::<Vec<_>>();
+                if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
+                    warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining photos");
                 }
             }
 
