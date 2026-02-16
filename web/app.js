@@ -883,7 +883,13 @@ function bindHorizontalDragScroll(container) {
 
 function syncPhotoFiltersFromForm(resetPage = false) {
   state.photoFilters.keyword = el.photoKeyword.value.trim();
-  state.photoFilters.album_id = el.photoAlbumFilter.value;
+  const hasAlbumPrefix = /(?:^|\s)album\s*:/i.test(state.photoFilters.keyword);
+  if (hasAlbumPrefix) {
+    state.photoFilters.album_id = "";
+    el.photoAlbumFilter.value = "";
+  } else {
+    state.photoFilters.album_id = el.photoAlbumFilter.value;
+  }
   state.photoFilters.order = el.photoOrder.value || "desc";
   state.photoFilters.start_time = dateToStartIso(el.photoStartDate.value);
   state.photoFilters.end_time = dateToEndIso(el.photoEndDate.value);
