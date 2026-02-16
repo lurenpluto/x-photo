@@ -31,6 +31,19 @@ fn collect_boot_env_snapshot() -> Vec<(String, String)> {
     .collect()
 }
 
+fn split_env_snapshot(snapshot: &[(String, String)]) -> (Vec<(String, String)>, Vec<String>) {
+    let mut overrides = Vec::new();
+    let mut unset = Vec::new();
+    for (k, v) in snapshot {
+        if v == "<unset>" {
+            unset.push(k.clone());
+        } else {
+            overrides.push((k.clone(), v.clone()));
+        }
+    }
+    (overrides, unset)
+}
+
 fn sqlite_file_path(database_url: &str) -> String {
     if let Some(path) = database_url.strip_prefix("sqlite://") {
         return path.to_string();
@@ -48,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = cfg.server.bind_addr.clone();
     let cmd_args: Vec<String> = std::env::args().collect();
     let env_snapshot = collect_boot_env_snapshot();
+    let (env_overrides, env_unset_keys) = split_env_snapshot(&env_snapshot);
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("<unknown-cwd>"))
         .to_string_lossy()
@@ -69,6 +83,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cwd = %cwd,
         executable = %exe_path,
         env_snapshot = ?env_snapshot,
+        env_overrides = ?env_overrides,
+        env_unset_keys = ?env_unset_keys,
         config_path = %loaded.path,
         config_root = %loaded.root,
         database_url = %database_url,
