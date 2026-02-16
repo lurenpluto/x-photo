@@ -42,6 +42,8 @@ Write-Host "[x-photo] Building service..."
 
 $serviceLog = Join-Path $rootDir ".service.log"
 $webLog = Join-Path $rootDir ".web.log"
+$servicePidFile = Join-Path $rootDir ".service.pid"
+$webPidFile = Join-Path $rootDir ".web.pid"
 
 $serviceProc = $null
 $webProc = $null
@@ -49,15 +51,18 @@ $webProc = $null
 try {
   Write-Host "[x-photo] Starting service on http://$serviceHost`:$servicePort ..."
   $serviceProc = Start-Process -FilePath "cargo" -ArgumentList @("run", "--manifest-path", $serviceManifest) -WorkingDirectory $rootDir -RedirectStandardOutput $serviceLog -RedirectStandardError $serviceLog -PassThru
+  Set-Content -Path $servicePidFile -Value $serviceProc.Id -NoNewline
 
   Write-Host "[x-photo] Starting web on http://$webHost`:$webPort ..."
   $webArgs = @() + $pythonArgsPrefix + @("-m", "http.server", $webPort, "--bind", $webHost, "--directory", $webDir)
   $webProc = Start-Process -FilePath $pythonExe -ArgumentList $webArgs -WorkingDirectory $rootDir -RedirectStandardOutput $webLog -RedirectStandardError $webLog -PassThru
+  Set-Content -Path $webPidFile -Value $webProc.Id -NoNewline
 
   Write-Host "[x-photo] Ready"
   Write-Host "  - Web: http://$webHost`:$webPort"
   Write-Host "  - API: http://$serviceHost`:$servicePort/rpc/v1"
   Write-Host "[x-photo] Logs: $serviceLog, $webLog"
+  Write-Host "[x-photo] Pid files: $servicePidFile, $webPidFile"
   Write-Host "[x-photo] Press Ctrl+C to stop both services."
 
   Wait-Process -Id @($serviceProc.Id, $webProc.Id)
@@ -68,5 +73,11 @@ finally {
   }
   if ($webProc -and -not $webProc.HasExited) {
     Stop-Process -Id $webProc.Id -Force
+  }
+  if (Test-Path $servicePidFile) {
+    Remove-Item $servicePidFile -Force
+  }
+  if (Test-Path $webPidFile) {
+    Remove-Item $webPidFile -Force
   }
 }

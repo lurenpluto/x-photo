@@ -29,6 +29,8 @@ cargo build --manifest-path "$SERVICE_DIR/Cargo.toml"
 
 SERVICE_PID=""
 WEB_PID=""
+SERVICE_PID_FILE="$ROOT_DIR/.service.pid"
+WEB_PID_FILE="$ROOT_DIR/.web.pid"
 
 cleanup() {
   if [[ -n "$SERVICE_PID" ]] && kill -0 "$SERVICE_PID" >/dev/null 2>&1; then
@@ -37,6 +39,7 @@ cleanup() {
   if [[ -n "$WEB_PID" ]] && kill -0 "$WEB_PID" >/dev/null 2>&1; then
     kill "$WEB_PID" >/dev/null 2>&1 || true
   fi
+  rm -f "$SERVICE_PID_FILE" "$WEB_PID_FILE"
 }
 
 trap cleanup EXIT INT TERM
@@ -44,15 +47,18 @@ trap cleanup EXIT INT TERM
 echo "[x-photo] Starting service on http://$SERVICE_HOST:$SERVICE_PORT ..."
 BIND_ADDR="$SERVICE_HOST:$SERVICE_PORT" cargo run --manifest-path "$SERVICE_DIR/Cargo.toml" >"$ROOT_DIR/.service.log" 2>&1 &
 SERVICE_PID=$!
+printf "%s" "$SERVICE_PID" >"$SERVICE_PID_FILE"
 
 echo "[x-photo] Starting web on http://$WEB_HOST:$WEB_PORT ..."
 "$PYTHON_CMD" -m http.server "$WEB_PORT" --bind "$WEB_HOST" --directory "$WEB_DIR" >"$ROOT_DIR/.web.log" 2>&1 &
 WEB_PID=$!
+printf "%s" "$WEB_PID" >"$WEB_PID_FILE"
 
 echo "[x-photo] Ready"
 echo "  - Web: http://$WEB_HOST:$WEB_PORT"
 echo "  - API: http://$SERVICE_HOST:$SERVICE_PORT/rpc/v1"
 echo "[x-photo] Logs: $ROOT_DIR/.service.log, $ROOT_DIR/.web.log"
+echo "[x-photo] Pid files: $SERVICE_PID_FILE, $WEB_PID_FILE"
 echo "[x-photo] Press Ctrl+C to stop both services."
 
 wait "$SERVICE_PID" "$WEB_PID"

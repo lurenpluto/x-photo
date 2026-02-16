@@ -24,6 +24,12 @@
 start.bat
 ```
 
+停止服务：
+
+- Linux/macOS: `./stop.sh`
+- Windows PowerShell: `.\stop.ps1`
+- Windows CMD: `stop.bat`
+
 默认地址：Web `http://127.0.0.1:5174`，API `http://127.0.0.1:8080/rpc/v1`。
 
 可通过环境变量覆盖：`SERVICE_HOST`、`SERVICE_PORT`、`WEB_HOST`、`WEB_PORT`。
