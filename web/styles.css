@@ -437,6 +437,17 @@ textarea {
   line-height: 1.3;
 }
 
+.photo-card .preview-entry {
+  margin-top: 0.35rem;
+  display: inline-block;
+  border-radius: 999px;
+  border: 1px solid rgba(30, 79, 132, 0.25);
+  background: rgba(30, 79, 132, 0.07);
+  color: #1e4f84;
+  font-size: 0.74rem;
+  padding: 0.14rem 0.5rem;
+}
+
 .chips {
   display: flex;
   flex-wrap: wrap;
@@ -686,9 +697,41 @@ textarea {
   gap: 0.6rem;
 }
 
-.meta-card {
-  border: 1px solid rgba(33, 48, 65, 0.14);
+.meta-section {
+  border: 1px solid rgba(33, 48, 65, 0.12);
   border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.meta-section summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.58rem 0.65rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #1e3c5d;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.meta-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.meta-section summary::after {
+  content: "+";
+  font-size: 1rem;
+  color: #446b93;
+}
+
+.meta-section[open] summary::after {
+  content: "-";
+}
+
+.meta-card {
+  border-top: 1px solid rgba(33, 48, 65, 0.1);
+  border-radius: 0 0 12px 12px;
   background: rgba(255, 255, 255, 0.84);
   padding: 0.62rem;
 }

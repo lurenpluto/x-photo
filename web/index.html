@@ -216,37 +216,53 @@
                 <img id="photoPreviewImg" alt="照片预览" />
               </section>
               <section class="photo-side">
-                <article class="meta-card">
-                  <h3>基础信息</h3>
-                  <div id="photoDetail" class="kv"></div>
-                </article>
+                <details class="meta-section" open>
+                  <summary>基础信息</summary>
+                  <article class="meta-card">
+                    <div id="photoDetail" class="kv"></div>
+                  </article>
+                </details>
 
-                <article class="meta-card">
-                  <h3>所在相册</h3>
-                  <div id="photoAlbums" class="chips"></div>
-                </article>
+                <details class="meta-section" open>
+                  <summary>所在相册</summary>
+                  <article class="meta-card">
+                    <div id="photoAlbums" class="chips"></div>
+                  </article>
+                </details>
 
-                <article class="meta-card">
-                  <h3>拍摄地点</h3>
-                  <p id="photoGeoText" class="hint">-</p>
-                  <a id="photoGeoLink" class="map-link hidden" href="#" target="_blank" rel="noreferrer">在地图打开</a>
-                </article>
+                <details class="meta-section" open>
+                  <summary>拍摄地点</summary>
+                  <article class="meta-card">
+                    <p id="photoGeoText" class="hint">-</p>
+                    <a id="photoGeoLink" class="map-link hidden" href="#" target="_blank" rel="noreferrer">在地图打开</a>
+                  </article>
+                </details>
 
-                <article class="meta-card">
-                  <h3>拍摄参数</h3>
-                  <div id="photoExifMeta" class="kv"></div>
-                </article>
+                <details class="meta-section" open>
+                  <summary>拍摄参数</summary>
+                  <article class="meta-card">
+                    <div id="photoExifMeta" class="kv"></div>
+                  </article>
+                </details>
+
+                <details class="meta-section" open>
+                  <summary>备注</summary>
+                  <article class="meta-card settings-grid">
+                    <label for="photoRemark">备注</label>
+                    <textarea id="photoRemark" rows="3" placeholder="输入备注"></textarea>
+                    <button id="btnSaveRemark" class="btn">保存备注</button>
+                  </article>
+                </details>
+
+                <details class="meta-section" open>
+                  <summary>加入相册</summary>
+                  <article class="meta-card settings-grid">
+                    <label for="photoAlbumSelect">加入相册</label>
+                    <select id="photoAlbumSelect"></select>
+                    <button id="btnAddToAlbum" class="btn">加入相册</button>
+                  </article>
+                </details>
               </section>
-            </div>
-            <div class="settings-grid">
-              <label for="photoRemark">备注</label>
-              <textarea id="photoRemark" rows="3" placeholder="输入备注"></textarea>
-              <button id="btnSaveRemark" class="btn">保存备注</button>
-            </div>
-            <div class="settings-grid">
-              <label for="photoAlbumSelect">加入相册</label>
-              <select id="photoAlbumSelect"></select>
-              <button id="btnAddToAlbum" class="btn">加入相册</button>
             </div>
             <p id="photoDetailMsg" class="hint"></p>
           </div>

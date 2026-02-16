@@ -271,26 +271,97 @@ function renderPhotoExif(p) {
   el.photoExifMeta.innerHTML = rows.map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`).join("");
 }
 
-function resetPhotoView() {
-  state.detail.photoView.scale = 1;
-  state.detail.photoView.tx = 0;
-  state.detail.photoView.ty = 0;
-  applyPhotoTransform();
-}
-
 function applyPhotoTransform() {
   const v = state.detail.photoView;
   el.photoPreviewImg.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
 }
 
 function zoomPhoto(step) {
+  zoomPhotoAtPoint(step, null, null);
+}
+
+function zoomPhotoAtPoint(step, clientX, clientY) {
   const v = state.detail.photoView;
-  const next = Math.min(5, Math.max(1, Number((v.scale + step).toFixed(2))));
-  v.scale = next;
+  const currentScale = v.scale;
+  const nextScale = Math.min(5, Math.max(1, Number((currentScale + step).toFixed(2))));
+  if (nextScale === currentScale) return;
+
+  if (clientX == null || clientY == null || currentScale <= 0) {
+    v.scale = nextScale;
+    if (v.scale === 1) {
+      v.tx = 0;
+      v.ty = 0;
+    }
+    applyPhotoTransform();
+    return;
+  }
+
+  const rect = el.photoPreviewImg.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+
+  const relativeX = (clientX - centerX - v.tx) / currentScale;
+  const relativeY = (clientY - centerY - v.ty) / currentScale;
+
+  v.scale = nextScale;
   if (v.scale === 1) {
     v.tx = 0;
     v.ty = 0;
+  } else {
+    v.tx = v.tx + relativeX * (currentScale - nextScale);
+    v.ty = v.ty + relativeY * (currentScale - nextScale);
   }
+
+  applyPhotoTransform();
+}
+
+function toggleZoomAtPoint(clientX, clientY) {
+  const v = state.detail.photoView;
+  const target = v.scale < 1.8 ? 2 : 1;
+  const step = target - v.scale;
+  if (Math.abs(step) < 0.001) return;
+  zoomPhotoAtPoint(step, clientX, clientY);
+}
+
+function startPhotoDrag(event) {
+  event.preventDefault();
+  if (state.detail.photoView.scale <= 1) return;
+  state.detail.photoView.dragging = true;
+  state.detail.photoView.dragStartX = event.clientX - state.detail.photoView.tx;
+  state.detail.photoView.dragStartY = event.clientY - state.detail.photoView.ty;
+  el.photoPreviewImg.classList.add("dragging");
+}
+
+function endPhotoDrag() {
+  state.detail.photoView.dragging = false;
+  el.photoPreviewImg.classList.remove("dragging");
+}
+
+function movePhotoDrag(event) {
+  if (!state.detail.photoView.dragging || state.detail.photoView.scale <= 1) return;
+  state.detail.photoView.tx = event.clientX - state.detail.photoView.dragStartX;
+  state.detail.photoView.ty = event.clientY - state.detail.photoView.dragStartY;
+  applyPhotoTransform();
+}
+
+function onPhotoWheel(event) {
+  if (!isDrawerOpen()) return;
+  event.preventDefault();
+  zoomPhotoAtPoint(event.deltaY < 0 ? 0.15 : -0.15, event.clientX, event.clientY);
+}
+
+function onPhotoDoubleClick(event) {
+  if (!isDrawerOpen()) return;
+  event.preventDefault();
+  toggleZoomAtPoint(event.clientX, event.clientY);
+}
+
+function resetPhotoView() {
+  state.detail.photoView.scale = 1;
+  state.detail.photoView.tx = 0;
+  state.detail.photoView.ty = 0;
+  state.detail.photoView.dragging = false;
+  el.photoPreviewImg.classList.remove("dragging");
   applyPhotoTransform();
 }
 
@@ -1059,6 +1130,7 @@ function renderAlbumDetailPhotos(items) {
         </div>
         <p class="item-sub">${escapeHtml(p.file_path)}</p>
         <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
+        <span class="preview-entry">预览</span>
       </article>
     `;
     })
@@ -1369,32 +1441,11 @@ function bindEvents() {
   el.btnPhotoZoomOut.addEventListener("click", () => zoomPhoto(-0.2));
   el.btnPhotoZoomReset.addEventListener("click", resetPhotoView);
 
-  el.photoPreviewImg.addEventListener("wheel", (event) => {
-    if (!isDrawerOpen()) return;
-    event.preventDefault();
-    zoomPhoto(event.deltaY < 0 ? 0.15 : -0.15);
-  });
-
-  el.photoPreviewImg.addEventListener("mousedown", (event) => {
-    event.preventDefault();
-    if (state.detail.photoView.scale <= 1) return;
-    state.detail.photoView.dragging = true;
-    state.detail.photoView.dragStartX = event.clientX - state.detail.photoView.tx;
-    state.detail.photoView.dragStartY = event.clientY - state.detail.photoView.ty;
-    el.photoPreviewImg.classList.add("dragging");
-  });
-
-  window.addEventListener("mouseup", () => {
-    state.detail.photoView.dragging = false;
-    el.photoPreviewImg.classList.remove("dragging");
-  });
-
-  window.addEventListener("mousemove", (event) => {
-    if (!state.detail.photoView.dragging || state.detail.photoView.scale <= 1) return;
-    state.detail.photoView.tx = event.clientX - state.detail.photoView.dragStartX;
-    state.detail.photoView.ty = event.clientY - state.detail.photoView.dragStartY;
-    applyPhotoTransform();
-  });
+  el.photoPreviewImg.addEventListener("wheel", onPhotoWheel);
+  el.photoPreviewImg.addEventListener("mousedown", startPhotoDrag);
+  el.photoPreviewImg.addEventListener("dblclick", onPhotoDoubleClick);
+  window.addEventListener("mouseup", endPhotoDrag);
+  window.addEventListener("mousemove", movePhotoDrag);
 
   el.btnAlbumDetailSearch.addEventListener("click", searchAlbumDetailPhotos);
   el.albumDetailKeyword.addEventListener("keydown", (event) => {
