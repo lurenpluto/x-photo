@@ -2977,7 +2977,7 @@ async fn run_scan_job(
             let mut first_error = result.first_error;
             let mut processed_count: i64 = 0;
             let collect_target_count = result.entries.len() as i64;
-            let total_count = collect_target_count + result.failed_count;
+            let total_count = collect_target_count;
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
             let mut touched_photo_ids: HashSet<String> = HashSet::new();
@@ -2985,7 +2985,6 @@ async fn run_scan_job(
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
             let mut last_scanned_content_hash: Option<String> = None;
-            let mut candidates: Vec<ScannedPhotoCandidate> = Vec::new();
             let mut collect_processed: i64 = 0;
 
             update_scan_running_progress(
@@ -2995,7 +2994,7 @@ async fn run_scan_job(
                 total_count,
                 failed_count,
                 None,
-                &format!("collecting photo metadata and fingerprints (0/{})", total_count),
+                &format!("scanning and writing photos (0/{})", total_count),
             )
             .await?;
 
@@ -3095,7 +3094,135 @@ async fn run_scan_job(
 
                 match candidate_result {
                     Ok(candidate) => {
-                        candidates.push(candidate);
+                        last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
+                        last_scanned_content_hash = Some(candidate.content_hash.clone());
+
+                        let existing = sqlx::query(
+                            "SELECT id, modified_at_fs, content_hash FROM photos WHERE source_id = ? AND storage_file_id = ?",
+                        )
+                        .bind(&source.id)
+                        .bind(&candidate.storage_file_id)
+                        .fetch_optional(&pool)
+                        .await
+                        .map_err(|e| {
+                            let msg = format!(
+                                "failed to check existing photo (source_id={}, storage_file_id={}, job_id={}): {}",
+                                source.id, candidate.storage_file_id, job_id, e
+                            );
+                            error!("{}", msg);
+                            msg
+                        })?;
+
+                        if let Some(row) = existing {
+                            let existing_modified_at: Option<String> = row.get("modified_at_fs");
+                            let existing_content_hash: Option<String> = row.get("content_hash");
+                            if existing_modified_at == candidate.modified_at_fs
+                                && existing_content_hash.as_deref()
+                                    == Some(candidate.content_hash.as_str())
+                            {
+                                skipped_count += 1;
+                            } else {
+                                updated_count += 1;
+                            }
+                        } else {
+                            new_count += 1;
+                        }
+
+                        let photo_id = build_photo_id(&source.id, &candidate.storage_file_id);
+                        let now = Utc::now().to_rfc3339();
+                        let upsert_result = sqlx::query(
+                            "INSERT INTO photos (
+                                id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
+                                content_hash, shot_at, created_at_fs, modified_at_fs, sort_time, width, height,
+                                exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
+                             ) VALUES (
+                                ?, ?, ?, ?, ?, ?, ?, ?,
+                                ?, ?, ?, ?, ?, NULL, NULL,
+                                ?, NULL, NULL, NULL, NULL, ?, ?
+                             )
+                             ON CONFLICT(source_id, storage_file_id) DO UPDATE SET
+                                file_path = excluded.file_path,
+                                file_name = excluded.file_name,
+                                file_ext = excluded.file_ext,
+                                file_size = excluded.file_size,
+                                mime_type = excluded.mime_type,
+                                content_hash = excluded.content_hash,
+                                shot_at = excluded.shot_at,
+                                created_at_fs = excluded.created_at_fs,
+                                modified_at_fs = excluded.modified_at_fs,
+                                sort_time = excluded.sort_time,
+                                exif_json = excluded.exif_json,
+                                deleted_at = NULL,
+                                updated_at = excluded.updated_at",
+                        )
+                        .bind(&photo_id)
+                        .bind(&source.id)
+                        .bind(&candidate.storage_file_id)
+                        .bind(&candidate.file_path)
+                        .bind(&candidate.file_name)
+                        .bind(candidate.file_ext.as_deref())
+                        .bind(candidate.file_size)
+                        .bind(candidate.mime_type.as_deref())
+                        .bind(&candidate.content_hash)
+                        .bind(candidate.shot_at.as_deref())
+                        .bind(candidate.created_at_fs.as_deref())
+                        .bind(candidate.modified_at_fs.as_deref())
+                        .bind(&candidate.sort_time)
+                        .bind(candidate.exif_json.as_deref())
+                        .bind(&now)
+                        .bind(&now)
+                        .execute(&pool)
+                        .await;
+
+                        if let Err(e) = upsert_result {
+                            failed_count += 1;
+                            error!(
+                                job_id,
+                                source_id = source.id,
+                                file_path = candidate.file_path,
+                                storage_file_id = candidate.storage_file_id,
+                                error = %e,
+                                "photo upsert failed"
+                            );
+                            if first_error.is_none() {
+                                first_error = Some(format!(
+                                    "photo upsert failed for {}: {}",
+                                    candidate.file_path, e
+                                ));
+                            }
+                        } else {
+                            touched_photo_ids.insert(photo_id.clone());
+
+                            match ensure_album_by_dir_rule(
+                                &pool,
+                                &source.id,
+                                &candidate.file_path,
+                                &photo_id,
+                                &album_rule_patterns,
+                                &mut album_cache,
+                            )
+                            .await
+                            {
+                                Ok(linked) => {
+                                    if linked {
+                                        auto_album_link_count += 1;
+                                    }
+                                }
+                                Err(e) => {
+                                    failed_count += 1;
+                                    error!(
+                                        job_id,
+                                        source_id = source.id,
+                                        file_path = candidate.file_path,
+                                        error = %e,
+                                        "auto album linking failed"
+                                    );
+                                    if first_error.is_none() {
+                                        first_error = Some(e);
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         failed_count += 1;
@@ -3106,9 +3233,18 @@ async fn run_scan_job(
                     }
                 }
 
+                processed_count = collect_processed;
+
                 if collect_processed % (checkpoint_every as i64) == 0 || collect_processed == collect_target_count {
+                    update_scan_checkpoint(
+                        &pool,
+                        &job_id,
+                        collect_processed,
+                        last_scanned_path.as_deref(),
+                    )
+                    .await?;
                     let stage = format!(
-                        "collecting photo metadata and fingerprints ({}/{})",
+                        "scanning and writing photos ({}/{})",
                         collect_processed, total_count
                     );
                     update_scan_running_progress(
@@ -3121,248 +3257,6 @@ async fn run_scan_job(
                         &stage,
                     )
                     .await?;
-                }
-            }
-
-            let stage2_total_count = candidates.len() as i64;
-            let now = Utc::now().to_rfc3339();
-
-            sqlx::query(
-                "UPDATE scan_jobs
-                 SET total_count = ?, processed_count = 0, failed_count = ?,
-                     error_message = 'processing photo metadata and writing database records'
-                 WHERE id = ?",
-            )
-            .bind(stage2_total_count)
-            .bind(failed_count)
-            .bind(&job_id)
-            .execute(&pool)
-            .await
-            .map_err(|e| {
-                format!(
-                    "failed to initialize scan progress fields (job_id={}, source_id={}): {}",
-                    job_id, source.id, e
-                )
-            })?;
-
-            if is_cancel_requested(&pool, &job_id).await? {
-                let finished_at = Utc::now().to_rfc3339();
-                sqlx::query(
-                    "UPDATE scan_jobs
-                     SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
-                     WHERE id = ?",
-                )
-                .bind(&finished_at)
-                .bind(processed_count)
-                .bind(last_scanned_path.as_deref())
-                .bind(stage2_total_count)
-                .bind(new_count)
-                .bind(updated_count)
-                .bind(failed_count)
-                .bind("cancel requested before photo upsert")
-                .bind(&job_id)
-                .execute(&pool)
-                .await
-                .map_err(|e| {
-                    format!(
-                        "failed to switch scan job {} status running->cancelled for source {}: {}",
-                        job_id, source.id, e
-                    )
-                })?;
-
-                upsert_source_scan_state(
-                    &pool,
-                    &source.id,
-                    "cancelled",
-                    Some(&running_at),
-                    Some(&finished_at),
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some("cancel requested before photo upsert"),
-                )
-                .await?;
-
-                info!(job_id, source_id = source.id, from = "running", to = "cancelled", "scan job status transition");
-                return Ok(());
-            }
-
-            for candidate in &candidates {
-                if is_cancel_requested(&pool, &job_id).await? {
-                    let finished_at = Utc::now().to_rfc3339();
-                    sqlx::query(
-                        "UPDATE scan_jobs
-                         SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
-                         WHERE id = ?",
-                    )
-                    .bind(&finished_at)
-                    .bind(processed_count)
-                    .bind(last_scanned_path.as_deref())
-                    .bind(stage2_total_count)
-                    .bind(new_count)
-                    .bind(updated_count)
-                    .bind(failed_count)
-                    .bind("cancel requested during running")
-                    .bind(&job_id)
-                    .execute(&pool)
-                    .await
-                    .map_err(|e| {
-                        format!(
-                            "failed to switch scan job {} status running->cancelled for source {}: {}",
-                            job_id, source.id, e
-                        )
-                    })?;
-
-                    upsert_source_scan_state(
-                        &pool,
-                        &source.id,
-                        "cancelled",
-                        Some(&running_at),
-                        Some(&finished_at),
-                        last_scanned_path.as_deref(),
-                        last_scanned_storage_file_id.as_deref(),
-                        last_scanned_modified_at.as_deref(),
-                        last_scanned_content_hash.as_deref(),
-                        Some("cancel requested during running"),
-                    )
-                    .await?;
-
-                    info!(job_id, source_id = source.id, from = "running", to = "cancelled", "scan job status transition");
-                    return Ok(());
-                }
-
-                processed_count += 1;
-                last_scanned_path = Some(candidate.file_path.clone());
-                last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
-                last_scanned_modified_at = candidate.modified_at_fs.clone();
-                last_scanned_content_hash = Some(candidate.content_hash.clone());
-
-                if processed_count % (checkpoint_every as i64) == 0 {
-                    update_scan_checkpoint(
-                        &pool,
-                        &job_id,
-                        processed_count,
-                        last_scanned_path.as_deref(),
-                    )
-                    .await?;
-                }
-
-                let existing = sqlx::query(
-                    "SELECT id, modified_at_fs, content_hash FROM photos WHERE source_id = ? AND storage_file_id = ?",
-                )
-                .bind(&source.id)
-                .bind(&candidate.storage_file_id)
-                .fetch_optional(&pool)
-                .await
-                .map_err(|e| {
-                    let msg = format!(
-                        "failed to check existing photo (source_id={}, storage_file_id={}, job_id={}): {}",
-                        source.id, candidate.storage_file_id, job_id, e
-                    );
-                    error!("{}", msg);
-                    msg
-                })?;
-
-                if let Some(row) = existing {
-                    let existing_modified_at: Option<String> = row.get("modified_at_fs");
-                    let existing_content_hash: Option<String> = row.get("content_hash");
-                    if existing_modified_at == candidate.modified_at_fs
-                        && existing_content_hash.as_deref() == Some(candidate.content_hash.as_str())
-                    {
-                        skipped_count += 1;
-                        continue;
-                    }
-                    updated_count += 1;
-                } else {
-                    new_count += 1;
-                }
-
-                let photo_id = build_photo_id(&source.id, &candidate.storage_file_id);
-                let upsert_result = sqlx::query(
-                    "INSERT INTO photos (
-                        id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
-                        content_hash, shot_at, created_at_fs, modified_at_fs, sort_time, width, height,
-                        exif_json, gps_lat, gps_lng, remark, deleted_at, created_at, updated_at
-                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, NULL, NULL,
-                        ?, NULL, NULL, NULL, NULL, ?, ?
-                     )
-                     ON CONFLICT(source_id, storage_file_id) DO UPDATE SET
-                        file_path = excluded.file_path,
-                        file_name = excluded.file_name,
-                        file_ext = excluded.file_ext,
-                        file_size = excluded.file_size,
-                        mime_type = excluded.mime_type,
-                        content_hash = excluded.content_hash,
-                        shot_at = excluded.shot_at,
-                        created_at_fs = excluded.created_at_fs,
-                        modified_at_fs = excluded.modified_at_fs,
-                        sort_time = excluded.sort_time,
-                        exif_json = excluded.exif_json,
-                        deleted_at = NULL,
-                        updated_at = excluded.updated_at",
-                )
-                .bind(&photo_id)
-                .bind(&source.id)
-                .bind(&candidate.storage_file_id)
-                .bind(&candidate.file_path)
-                .bind(&candidate.file_name)
-                .bind(candidate.file_ext.as_deref())
-                .bind(candidate.file_size)
-                .bind(candidate.mime_type.as_deref())
-                .bind(&candidate.content_hash)
-                .bind(candidate.shot_at.as_deref())
-                .bind(candidate.created_at_fs.as_deref())
-                .bind(candidate.modified_at_fs.as_deref())
-                .bind(&candidate.sort_time)
-                .bind(candidate.exif_json.as_deref())
-                .bind(&now)
-                .bind(&now)
-                .execute(&pool)
-                .await;
-
-                if let Err(e) = upsert_result {
-                    failed_count += 1;
-                    error!(
-                        job_id,
-                        source_id = source.id,
-                        file_path = candidate.file_path,
-                        storage_file_id = candidate.storage_file_id,
-                        error = %e,
-                        "photo upsert failed"
-                    );
-                    continue;
-                }
-
-                touched_photo_ids.insert(photo_id.clone());
-
-                match ensure_album_by_dir_rule(
-                    &pool,
-                    &source.id,
-                    &candidate.file_path,
-                    &photo_id,
-                    &album_rule_patterns,
-                    &mut album_cache,
-                )
-                .await
-                {
-                    Ok(linked) => {
-                        if linked {
-                            auto_album_link_count += 1;
-                        }
-                    }
-                    Err(e) => {
-                        failed_count += 1;
-                        error!(
-                            job_id,
-                            source_id = source.id,
-                            file_path = candidate.file_path,
-                            error = %e,
-                            "auto album linking failed"
-                        );
-                    }
                 }
             }
 
