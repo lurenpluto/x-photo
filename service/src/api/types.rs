@@ -119,6 +119,14 @@ pub struct PhotoDetailData {
     pub is_favorite: bool,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct FavoritePhotoItem {
+    #[serde(flatten)]
+    #[sqlx(flatten)]
+    pub photo: crate::domain::models::Photo,
+    pub favorite_at: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AlbumDetailData {
     pub album: crate::domain::models::Album,

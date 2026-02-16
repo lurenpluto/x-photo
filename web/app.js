@@ -900,7 +900,12 @@ function renderPhotos(data) {
 }
 
 function renderFavoritePhotos(data) {
-  const items = data.items || [];
+  const items = (data.items || []).map((item) => {
+    if (item && item.photo) {
+      return { ...item.photo, favorite_at: item.favorite_at || "" };
+    }
+    return item;
+  });
   state.photoItems = items.map((p) => p.id);
   state.favorite.total = data.total ?? 0;
   state.favorite.page = data.page ?? 1;
@@ -933,10 +938,12 @@ function renderFavoritePhotos(data) {
           const visual = photoVisualStyle(p);
           return `
         <article class="photo-card" data-favorite-photo-id="${p.id}">
+          <button class="favorite-remove-btn" type="button" data-favorite-remove-id="${p.id}" title="取消收藏">取消收藏</button>
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
           <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
+          <p class="item-sub">收藏时间: ${escapeHtml(formatShotTime(p.favorite_at))}</p>
         </article>
       `;
         })
@@ -954,6 +961,34 @@ function renderFavoritePhotos(data) {
     card.addEventListener("click", () => {
       const photoId = card.getAttribute("data-favorite-photo-id");
       if (photoId) openPhotoDetailPage(photoId);
+    });
+  });
+
+  el.favoriteMasonry.querySelectorAll("[data-favorite-remove-id]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const photoId = btn.getAttribute("data-favorite-remove-id");
+      if (!photoId) return;
+      btn.disabled = true;
+      try {
+        await api(`/photos/${photoId}/favorite`, {
+          method: "PATCH",
+          body: JSON.stringify({ favorite: false }),
+        });
+        showToast("已取消收藏");
+        await loadFavoritePhotos();
+        if (state.detail.active && state.detail.type === "photo" && state.selectedPhotoId === photoId) {
+          if (state.photoItems.length > 0) {
+            await openPhotoDetailPage(state.photoItems[0], { pushHistory: false });
+          } else {
+            goDetailUp();
+          }
+        }
+      } catch (err) {
+        showToast(`取消收藏失败: ${err.message}`, "error");
+      } finally {
+        btn.disabled = false;
+      }
     });
   });
 }

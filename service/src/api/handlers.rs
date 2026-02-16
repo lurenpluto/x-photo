@@ -23,8 +23,8 @@ use tracing::{error, info, warn};
 use crate::api::types::{
     AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
     BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
-    ActiveTaskQuery, FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData,
-    PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, DaemonTaskHealthItem,
+    ActiveTaskQuery, FavoritePhotoItem, FsWatchScanTriggerRequest, PagedData, PaginationQuery,
+    PhotoDetailData, PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, DaemonTaskHealthItem,
     TaskHealthData, TaskHealthQuery, TaskJobData, TaskJobsQuery, TaskOverviewData,
     TaskOverviewQuery, UpdateAlbumRequest, UpdatePhotoFavoriteRequest, UpdatePhotoRemarkRequest,
 };
@@ -1320,7 +1320,7 @@ pub async fn get_photo_detail(
 pub async fn list_favorite_photos(
     Query(query): Query<PaginationQuery>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<PagedData<Photo>>>, (StatusCode, Json<ApiResponse<Value>>)> {
+) -> Result<Json<ApiResponse<PagedData<FavoritePhotoItem>>>, (StatusCode, Json<ApiResponse<Value>>)> {
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(100).clamp(1, 500);
     let offset = (page - 1) * page_size;
@@ -1335,14 +1335,15 @@ pub async fn list_favorite_photos(
     .await
     .map_err(|err| internal_db_error("list_favorite_photos.count", json!({}), err))?;
 
-    let items = sqlx::query_as::<_, Photo>(
+    let items = sqlx::query_as::<_, FavoritePhotoItem>(
         "SELECT p.id, p.source_id, p.storage_file_id, p.file_path, p.file_name, p.file_ext, p.file_size, p.mime_type,
                 p.content_hash, p.shot_at, p.created_at_fs, p.modified_at_fs, p.sort_time, p.width, p.height,
-                p.exif_json, p.gps_lat, p.gps_lng, p.remark, p.deleted_at, p.created_at, p.updated_at
+                p.exif_json, p.gps_lat, p.gps_lng, p.remark, p.deleted_at, p.created_at, p.updated_at,
+                f.created_at AS favorite_at
          FROM photo_favorites f
          INNER JOIN photos p ON p.id = f.photo_id
          WHERE p.deleted_at IS NULL
-         ORDER BY p.sort_time DESC
+         ORDER BY f.created_at DESC
          LIMIT ? OFFSET ?",
     )
     .bind(page_size)
