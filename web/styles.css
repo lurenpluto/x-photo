@@ -444,25 +444,20 @@ textarea {
 }
 
 .album-row {
-  display: flex;
-  flex-wrap: nowrap;
-  overflow-x: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 0.65rem;
   padding-bottom: 0.15rem;
-  cursor: grab;
-  scrollbar-width: thin;
-  scroll-behavior: smooth;
+  overflow: hidden;
   min-width: 0;
   max-width: 100%;
 }
 
 .album-row.dragging {
-  cursor: grabbing;
   user-select: none;
 }
 
 .album-card {
-  flex: 0 0 240px;
   border: 1px solid rgba(33, 48, 65, 0.14);
   border-radius: 13px;
   padding: 0.4rem;
