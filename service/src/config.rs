@@ -175,7 +175,8 @@ pub struct LoadedConfig {
 
 pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     let config_path = resolve_config_path();
-    ensure_default_config(&config_path)?;
+    let default_config_path = default_root_dir().join("config.toml");
+    ensure_default_config(&config_path, &default_config_path)?;
     let content = std::fs::read_to_string(&config_path).map_err(|e| {
         format!(
             "Could not read config file at {}: {}",
@@ -307,9 +308,21 @@ fn resolve_root_dir(raw_root: &str) -> PathBuf {
     p
 }
 
-fn ensure_default_config(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn ensure_default_config(
+    path: &PathBuf,
+    default_config_path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
     if path.exists() {
         return Ok(());
+    }
+
+    if path != default_config_path {
+        return Err(format!(
+            "Config file not found at {}. Use --config with an existing file, or start once without --config to initialize default config at {}",
+            path.display(),
+            default_config_path.display(),
+        )
+        .into());
     }
 
     if let Some(parent) = path.parent() {

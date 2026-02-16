@@ -1,9 +1,42 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use axum::Router;
 use service::{api, config, db, logging};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{error, info};
+
+fn env_or_unset(key: &str) -> String {
+    std::env::var(key).unwrap_or_else(|_| "<unset>".to_string())
+}
+
+fn collect_boot_env_snapshot() -> Vec<(String, String)> {
+    [
+        "HOME",
+        "USER",
+        "HOSTNAME",
+        "CONFIG_PATH",
+        "BIND_ADDR",
+        "DATABASE_URL",
+        "LOG_DIR",
+        "LOG_LEVEL",
+        "SCAN_MAX_CONCURRENT_JOBS",
+        "SCAN_CHECKPOINT_EVERY",
+        "SCAN_RESUME_ENABLED",
+        "SCAN_TASK_DISPATCH_INTERVAL_MS",
+        "SCAN_TASK_STALE_SECONDS",
+    ]
+    .into_iter()
+    .map(|k| (k.to_string(), env_or_unset(k)))
+    .collect()
+}
+
+fn sqlite_file_path(database_url: &str) -> String {
+    if let Some(path) = database_url.strip_prefix("sqlite://") {
+        return path.to_string();
+    }
+    "<non-sqlite-url>".to_string()
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,11 +47,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database_url = cfg.database.url.clone();
     let bind_addr = cfg.server.bind_addr.clone();
     let cmd_args: Vec<String> = std::env::args().collect();
+    let env_snapshot = collect_boot_env_snapshot();
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("<unknown-cwd>"))
+        .to_string_lossy()
+        .to_string();
+    let exe_path = std::env::current_exe()
+        .unwrap_or_else(|_| PathBuf::from("<unknown-exe>"))
+        .to_string_lossy()
+        .to_string();
+    let db_file_path = sqlite_file_path(&database_url);
 
     info!(
+        service_name = "xphoto-service",
+        service_version = env!("CARGO_PKG_VERSION"),
+        crate_name = env!("CARGO_PKG_NAME"),
+        rust_debug = cfg!(debug_assertions),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        family = std::env::consts::FAMILY,
+        cwd = %cwd,
+        executable = %exe_path,
+        env_snapshot = ?env_snapshot,
         config_path = %loaded.path,
         config_root = %loaded.root,
         database_url = %database_url,
+        sqlite_db_file = %db_file_path,
         bind_addr = %bind_addr,
         log_dir = %cfg.logging.dir,
         log_level = %cfg.logging.level,
@@ -28,8 +82,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         scan_resume_enabled = cfg.scan.resume_enabled,
         scan_task_dispatch_interval_ms = cfg.scan.task_dispatch_interval_ms,
         scan_task_stale_seconds = cfg.scan.task_stale_seconds,
+        album_rules_enabled = cfg.album_rules.enabled,
+        album_rule_regex_count = cfg.album_rules.regex_patterns.len(),
+        date_delimiters = ?cfg.album_rules.date_delimiters,
         args = ?cmd_args,
-        "bootstrapping service with runtime inputs"
+        "bootstrapping service with full runtime context"
     );
 
     let connect_opts = database_url
