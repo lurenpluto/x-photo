@@ -115,6 +115,7 @@ const el = {
   photoDetailNav: $("photoDetailNav"),
   photoDetailPage: $("photoDetailPage"),
   photoPreviewImg: $("photoPreviewImg"),
+  photoZoomBadge: $("photoZoomBadge"),
   btnPhotoZoomIn: $("btnPhotoZoomIn"),
   btnPhotoZoomOut: $("btnPhotoZoomOut"),
   btnPhotoZoomReset: $("btnPhotoZoomReset"),
@@ -271,9 +272,30 @@ function renderPhotoExif(p) {
   el.photoExifMeta.innerHTML = rows.map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`).join("");
 }
 
+function clampPhotoPan() {
+  const v = state.detail.photoView;
+  const stage = el.photoPreviewImg.parentElement;
+  if (!stage) return;
+
+  const stageW = stage.clientWidth;
+  const stageH = stage.clientHeight;
+  const imgW = el.photoPreviewImg.offsetWidth;
+  const imgH = el.photoPreviewImg.offsetHeight;
+
+  const maxX = Math.max(0, (imgW * v.scale - stageW) / 2);
+  const maxY = Math.max(0, (imgH * v.scale - stageH) / 2);
+
+  v.tx = Math.max(-maxX, Math.min(maxX, v.tx));
+  v.ty = Math.max(-maxY, Math.min(maxY, v.ty));
+}
+
 function applyPhotoTransform() {
   const v = state.detail.photoView;
+  clampPhotoPan();
   el.photoPreviewImg.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+  if (el.photoZoomBadge) {
+    el.photoZoomBadge.textContent = `${Math.round(v.scale * 100)}%`;
+  }
 }
 
 function zoomPhoto(step) {
@@ -1125,6 +1147,7 @@ function renderAlbumDetailPhotos(items) {
       const visual = photoVisualStyle(p);
       return `
       <article class="photo-card" data-album-photo-id="${p.id}">
+        <span class="preview-fab">预览</span>
         <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
           <div class="photo-title">${escapeHtml(p.file_name)}</div>
         </div>
