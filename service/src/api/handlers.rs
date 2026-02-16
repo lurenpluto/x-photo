@@ -2720,6 +2720,7 @@ async fn enqueue_scan_job(
     let limiter = state.scan_limiter.clone();
     let job_id_for_task = job_id.clone();
     let checkpoint_every = state.config.scan.checkpoint_every.max(1);
+    let search_index_sync_every = state.config.scan.search_index_sync_every.max(1);
     let resume_enabled = state.config.scan.resume_enabled;
     let album_rule_patterns = if state.config.album_rules.enabled {
         build_album_rule_patterns(&state.config)
@@ -2741,6 +2742,7 @@ async fn enqueue_scan_job(
             source,
             album_rule_patterns,
             checkpoint_every,
+            search_index_sync_every,
             resume_enabled,
         )
         .await
@@ -2824,6 +2826,7 @@ async fn run_scan_job(
     source: Source,
     album_rule_patterns: Vec<AlbumRulePattern>,
     checkpoint_every: usize,
+    search_index_sync_every: usize,
     resume_enabled: bool,
 ) -> Result<(), String> {
     let current_status: Option<String> = sqlx::query_scalar("SELECT status FROM scan_jobs WHERE id = ?")
@@ -3235,7 +3238,12 @@ async fn run_scan_job(
 
                 processed_count = collect_processed;
 
-                if collect_processed % (checkpoint_every as i64) == 0 || collect_processed == collect_target_count {
+                let should_checkpoint =
+                    collect_processed % (checkpoint_every as i64) == 0 || collect_processed == collect_target_count;
+                let should_sync_index =
+                    collect_processed % (search_index_sync_every as i64) == 0 || collect_processed == collect_target_count;
+
+                if should_checkpoint {
                     update_scan_checkpoint(
                         &pool,
                         &job_id,
@@ -3257,7 +3265,9 @@ async fn run_scan_job(
                         &stage,
                     )
                     .await?;
+                }
 
+                if should_sync_index {
                     if !pending_index_photo_ids.is_empty() {
                         let ids = pending_index_photo_ids.iter().cloned().collect::<Vec<_>>();
                         if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {

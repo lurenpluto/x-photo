@@ -44,6 +44,7 @@ pub struct StorageConfig {
 pub struct ScanConfig {
     pub max_concurrent_jobs: usize,
     pub checkpoint_every: usize,
+    pub search_index_sync_every: usize,
     pub resume_enabled: bool,
     pub task_dispatch_interval_ms: u64,
     pub task_stale_seconds: i64,
@@ -89,6 +90,7 @@ impl Default for AppConfig {
             scan: ScanConfig {
                 max_concurrent_jobs: 2,
                 checkpoint_every: 50,
+                search_index_sync_every: 100,
                 resume_enabled: true,
                 task_dispatch_interval_ms: 2000,
                 task_stale_seconds: 120,
@@ -154,6 +156,7 @@ impl Default for ScanConfig {
         Self {
             max_concurrent_jobs: 2,
             checkpoint_every: 50,
+            search_index_sync_every: 100,
             resume_enabled: true,
             task_dispatch_interval_ms: 2000,
             task_stale_seconds: 120,
@@ -219,6 +222,11 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(v) = std::env::var("SCAN_CHECKPOINT_EVERY") {
         if let Ok(n) = v.parse::<usize>() {
             config.scan.checkpoint_every = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_SEARCH_INDEX_SYNC_EVERY") {
+        if let Ok(n) = v.parse::<usize>() {
+            config.scan.search_index_sync_every = n;
         }
     }
     if let Ok(v) = std::env::var("SCAN_RESUME_ENABLED") {
@@ -385,6 +393,7 @@ allow_delete = false
 [scan]
 max_concurrent_jobs = 2
 checkpoint_every = 50
+search_index_sync_every = 100
 resume_enabled = true
 task_dispatch_interval_ms = 2000
 task_stale_seconds = 120
