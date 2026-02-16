@@ -805,7 +805,8 @@ pub async fn search_photos(
     let page_size = req.page_size.unwrap_or(100).clamp(1, 500);
     let offset = (page - 1) * page_size;
     let keyword = req.keyword.unwrap_or_default().trim().to_string();
-    let keyword_fts = build_fts_query(&keyword);
+    let keyword_parts = parse_keyword_search(&keyword);
+    let keyword_fts = build_fts_query(&keyword_parts.free_keyword);
     let album_id = req.album_id.unwrap_or_default().trim().to_string();
     let source_id = req.source_id.unwrap_or_default().trim().to_string();
     let start_time = req.start_time.unwrap_or_default().trim().to_string();
@@ -829,7 +830,7 @@ pub async fn search_photos(
     let mut count_builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM photos p WHERE p.deleted_at IS NULL");
     apply_photo_search_filters(
         &mut count_builder,
-        &keyword,
+        &keyword_parts,
         keyword_fts.as_deref(),
         &album_id,
         &source_id,
@@ -864,7 +865,7 @@ pub async fn search_photos(
     );
     apply_photo_search_filters(
         &mut list_builder,
-        &keyword,
+        &keyword_parts,
         keyword_fts.as_deref(),
         &album_id,
         &source_id,
@@ -912,15 +913,15 @@ pub async fn search_photos(
 
 fn apply_photo_search_filters(
     builder: &mut QueryBuilder<Sqlite>,
-    keyword: &str,
+    keyword: &KeywordSearchParts,
     keyword_fts: Option<&str>,
     album_id: &str,
     source_id: &str,
     start_time: &str,
     end_time: &str,
 ) {
-    if !keyword.is_empty() {
-        let like = format!("%{}%", keyword);
+    if !keyword.free_keyword.is_empty() {
+        let like = format!("%{}%", keyword.free_keyword);
         builder.push(" AND (");
 
         if let Some(fts_query) = keyword_fts {
@@ -948,6 +949,61 @@ fn apply_photo_search_filters(
         builder.push_bind(like);
         builder.push(")");
         builder.push(") )");
+    }
+
+    for term in &keyword.album_terms {
+        let like = format!("%{}%", term);
+        builder.push(
+            " AND EXISTS (SELECT 1 FROM photo_albums pa INNER JOIN albums a ON a.id = pa.album_id WHERE pa.photo_id = p.id AND a.name LIKE ",
+        );
+        builder.push_bind(like);
+        builder.push(")");
+    }
+
+    for term in &keyword.remark_terms {
+        let like = format!("%{}%", term);
+        builder.push(" AND IFNULL(p.remark, '') LIKE ");
+        builder.push_bind(like);
+    }
+
+    for term in &keyword.path_terms {
+        let like = format!("%{}%", term);
+        builder.push(" AND p.file_path LIKE ");
+        builder.push_bind(like);
+    }
+
+    for term in &keyword.exif_terms {
+        let like = format!("%{}%", term);
+        builder.push(" AND IFNULL(p.exif_json, '') LIKE ");
+        builder.push_bind(like);
+    }
+
+    for term in &keyword.camera_terms {
+        let like = format!("%{}%", term);
+        builder.push(" AND IFNULL(p.exif_json, '') LIKE ");
+        builder.push_bind(like);
+    }
+
+    for term in &keyword.lens_terms {
+        let like = format!("%{}%", term);
+        builder.push(" AND IFNULL(p.exif_json, '') LIKE ");
+        builder.push_bind(like);
+    }
+
+    for term in &keyword.source_terms {
+        let like = format!("%{}%", term);
+        builder.push(" AND (p.source_id LIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.name LIKE ");
+        builder.push_bind(like);
+        builder.push("))");
+    }
+
+    for term in &keyword.date_terms {
+        let normalized = term.replace('/', "-").replace('.', "-");
+        let like = format!("{}%", normalized);
+        builder.push(" AND p.sort_time LIKE ");
+        builder.push_bind(like);
     }
 
     if !album_id.is_empty() {
@@ -991,6 +1047,56 @@ fn build_fts_query(keyword: &str) -> Option<String> {
     } else {
         Some(tokens.join(" AND "))
     }
+}
+
+#[derive(Default, Debug)]
+struct KeywordSearchParts {
+    free_keyword: String,
+    album_terms: Vec<String>,
+    remark_terms: Vec<String>,
+    exif_terms: Vec<String>,
+    camera_terms: Vec<String>,
+    lens_terms: Vec<String>,
+    path_terms: Vec<String>,
+    source_terms: Vec<String>,
+    date_terms: Vec<String>,
+}
+
+fn parse_keyword_search(keyword: &str) -> KeywordSearchParts {
+    let mut out = KeywordSearchParts::default();
+    let mut free_terms = Vec::new();
+
+    for token in keyword.split_whitespace() {
+        if token.is_empty() {
+            continue;
+        }
+
+        let Some((prefix, value_raw)) = token.split_once(':') else {
+            free_terms.push(token.to_string());
+            continue;
+        };
+
+        let value = value_raw.trim();
+        if value.is_empty() {
+            free_terms.push(token.to_string());
+            continue;
+        }
+
+        match prefix.to_ascii_lowercase().as_str() {
+            "album" => out.album_terms.push(value.to_string()),
+            "remark" => out.remark_terms.push(value.to_string()),
+            "path" => out.path_terms.push(value.to_string()),
+            "exif" => out.exif_terms.push(value.to_string()),
+            "camera" => out.camera_terms.push(value.to_string()),
+            "lens" => out.lens_terms.push(value.to_string()),
+            "source" => out.source_terms.push(value.to_string()),
+            "date" => out.date_terms.push(value.to_string()),
+            _ => free_terms.push(token.to_string()),
+        }
+    }
+
+    out.free_keyword = free_terms.join(" ");
+    out
 }
 
 fn apply_task_job_filters(
