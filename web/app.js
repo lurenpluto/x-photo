@@ -107,6 +107,8 @@ const el = {
   photoDetailNav: $("photoDetailNav"),
   photoDetailPage: $("photoDetailPage"),
   photoPreviewImg: $("photoPreviewImg"),
+  photoGeoText: $("photoGeoText"),
+  photoGeoLink: $("photoGeoLink"),
   albumDetailPage: $("albumDetailPage"),
   albumDetailMeta: $("albumDetailMeta"),
   albumDetailPhotos: $("albumDetailPhotos"),
@@ -209,6 +211,10 @@ function isoToDateInput(iso) {
 function setHealthText(text, ok = true) {
   el.healthStatus.textContent = text;
   el.healthStatus.style.color = ok ? "var(--accent-deep)" : "var(--warning)";
+}
+
+function buildMapUrl(lat, lng) {
+  return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
 }
 
 async function api(path, options = {}) {
@@ -908,6 +914,18 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     const v = Date.now();
     el.photoPreviewImg.src = `${state.apiBase}/photos/${photoId}/file?v=${v}`;
     el.photoPreviewImg.alt = p.file_name || "照片预览";
+
+    const lat = p.gps_lat;
+    const lng = p.gps_lng;
+    const hasGeo = Number.isFinite(lat) && Number.isFinite(lng);
+    if (hasGeo) {
+      el.photoGeoText.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+      el.photoGeoLink.href = buildMapUrl(lat, lng);
+      el.photoGeoLink.classList.remove("hidden");
+    } else {
+      el.photoGeoText.textContent = "无定位信息";
+      el.photoGeoLink.classList.add("hidden");
+    }
     state.selectedPhotoAlbums = data.albums || [];
     const albumText = state.selectedPhotoAlbums.map((a) => a.name).join(" / ") || "-";
     el.photoDetail.innerHTML = [

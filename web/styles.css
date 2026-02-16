@@ -621,6 +621,28 @@ textarea {
   display: grid;
   place-items: center;
   padding: 0.8rem;
+  position: relative;
+}
+
+.photo-stage-toolbar {
+  position: absolute;
+  left: 0.7rem;
+  right: 0.7rem;
+  top: 0.7rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  z-index: 1;
+}
+
+.photo-stage-toolbar .btn {
+  color: #d8e6f7;
+  border-color: rgba(216, 230, 247, 0.3);
+  background: rgba(15, 23, 34, 0.48);
+}
+
+.photo-stage-toolbar .btn:disabled {
+  opacity: 0.7;
 }
 
 .photo-stage img {
@@ -639,6 +661,24 @@ textarea {
   display: grid;
   align-content: start;
   gap: 0.6rem;
+}
+
+.meta-card {
+  border: 1px solid rgba(33, 48, 65, 0.14);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+  padding: 0.62rem;
+}
+
+.map-link {
+  color: var(--accent-deep);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.map-link:hover {
+  text-decoration: underline;
 }
 
 .hidden {

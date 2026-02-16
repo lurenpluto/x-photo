@@ -193,14 +193,29 @@
           <div id="photoDetailPage" class="detail-page hidden">
             <div class="photo-detail-layout">
               <section class="photo-stage">
+                <header class="photo-stage-toolbar">
+                  <button class="btn ghost small" type="button" disabled>分享</button>
+                  <button class="btn ghost small" type="button" disabled>收藏</button>
+                  <button class="btn ghost small" type="button" disabled>删除</button>
+                </header>
                 <img id="photoPreviewImg" alt="照片预览" />
               </section>
               <section class="photo-side">
-                <div id="photoDetail" class="kv"></div>
-                <div>
+                <article class="meta-card">
+                  <h3>基础信息</h3>
+                  <div id="photoDetail" class="kv"></div>
+                </article>
+
+                <article class="meta-card">
                   <h3>所在相册</h3>
                   <div id="photoAlbums" class="chips"></div>
-                </div>
+                </article>
+
+                <article class="meta-card">
+                  <h3>拍摄地点</h3>
+                  <p id="photoGeoText" class="hint">-</p>
+                  <a id="photoGeoLink" class="map-link hidden" href="#" target="_blank" rel="noreferrer">在地图打开</a>
+                </article>
               </section>
             </div>
             <div class="settings-grid">
