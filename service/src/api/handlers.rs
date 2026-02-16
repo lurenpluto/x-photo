@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path as StdPath;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -1134,9 +1135,10 @@ pub async fn get_photo_file(
     info!(photo_id, "get_photo_file requested");
 
     let row = sqlx::query(
-        "SELECT file_path, mime_type
-         FROM photos
-         WHERE id = ? AND deleted_at IS NULL",
+        "SELECT p.file_path, p.mime_type, s.root_path
+         FROM photos p
+         LEFT JOIN sources s ON s.id = p.source_id
+         WHERE p.id = ? AND p.deleted_at IS NULL",
     )
     .bind(&photo_id)
     .fetch_optional(&state.pool)
@@ -1146,18 +1148,37 @@ pub async fn get_photo_file(
 
     let file_path: String = row.get("file_path");
     let mime_type: Option<String> = row.get("mime_type");
+    let source_root: Option<String> = row.get("root_path");
 
-    let bytes = tokio::fs::read(&file_path).await.map_err(|e| {
-        error!(photo_id, file_path, error = %e, "failed to read photo file");
-        (
+    let candidates = resolve_photo_file_candidates(&file_path, source_root.as_deref());
+    let mut bytes: Option<Vec<u8>> = None;
+    let mut tried = Vec::new();
+    for candidate in &candidates {
+        tried.push(candidate.to_string_lossy().to_string());
+        match tokio::fs::read(candidate).await {
+            Ok(v) => {
+                bytes = Some(v);
+                break;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let Some(bytes) = bytes else {
+        error!(photo_id, file_path, source_root = ?source_root, tried = ?tried, "failed to resolve photo file from candidates");
+        return Err((
             StatusCode::NOT_FOUND,
             Json(ApiResponse {
                 code: 404,
-                message: format!("photo file not found: {}", e),
-                data: json!({}),
+                message: "photo file not found on disk".to_string(),
+                data: json!({
+                    "photo_id": photo_id,
+                    "file_path": file_path,
+                    "tried": tried,
+                }),
             }),
-        )
-    })?;
+        ));
+    };
 
     let content_type = mime_type
         .filter(|v| !v.trim().is_empty())
@@ -1173,6 +1194,39 @@ pub async fn get_photo_file(
     }
 
     Ok(response)
+}
+
+fn resolve_photo_file_candidates(file_path: &str, source_root: Option<&str>) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+
+    let direct = expand_tilde_path(file_path);
+    out.push(direct.clone());
+
+    if direct.is_relative() {
+        if let Some(root) = source_root {
+            let root_expanded = expand_tilde_path(root);
+            out.push(root_expanded.join(&direct));
+        }
+    }
+
+    let mut dedup = HashSet::new();
+    out.retain(|p| dedup.insert(p.to_string_lossy().to_string()));
+    out
+}
+
+fn expand_tilde_path(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    if let Some(stripped) = trimmed.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(stripped);
+        }
+    }
+    PathBuf::from(trimmed)
 }
 
 fn guess_mime_by_file_path(path: &str) -> String {
