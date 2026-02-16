@@ -2431,14 +2431,21 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
             let checkpoint = json!({
                 "scan_job_id": scan_job_id,
                 "scan_status": scan_status,
+                "processed_count": processed_count,
+                "total_count": total_count,
             });
             sqlx::query(
                 "UPDATE task_jobs
-                 SET status = 'running', scan_job_id = ?, checkpoint_json = ?, heartbeat_at = ?, updated_at = ?
+                 SET status = 'running', scan_job_id = ?, checkpoint_json = ?,
+                     progress_done = ?, progress_total = ?, error_message = ?,
+                     heartbeat_at = ?, updated_at = ?
                  WHERE id = ? AND status IN ('pending', 'running')",
             )
             .bind(&scan_job_id)
             .bind(checkpoint.to_string())
+            .bind(processed_count)
+            .bind(total_count)
+            .bind(error_message.as_deref())
             .bind(&now)
             .bind(&now)
             .bind(&task_id)
@@ -2800,7 +2807,8 @@ async fn run_scan_job(
     let running_at = Utc::now().to_rfc3339();
     let transitioned = sqlx::query(
         "UPDATE scan_jobs
-         SET status = 'running', started_at = ?
+         SET status = 'running', started_at = ?,
+             error_message = 'collecting photo files (hash/exif), this may take a while for large folders'
          WHERE id = ? AND status = 'pending'",
     )
         .bind(&running_at)
@@ -2976,6 +2984,7 @@ async fn run_scan_job(
             let mut failed_count: i64 = result.failed_count;
             let mut processed_count: i64 = 0;
             let now = Utc::now().to_rfc3339();
+            let total_count = (result.candidates.len() as i64) + result.failed_count;
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
             let mut touched_photo_ids: HashSet<String> = HashSet::new();
@@ -2983,6 +2992,24 @@ async fn run_scan_job(
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
             let mut last_scanned_content_hash: Option<String> = None;
+
+            sqlx::query(
+                "UPDATE scan_jobs
+                 SET total_count = ?, processed_count = 0, failed_count = ?,
+                     error_message = 'processing photo metadata and writing database records'
+                 WHERE id = ?",
+            )
+            .bind(total_count)
+            .bind(failed_count)
+            .bind(&job_id)
+            .execute(&pool)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to initialize scan progress fields (job_id={}, source_id={}): {}",
+                    job_id, source.id, e
+                )
+            })?;
 
             if is_cancel_requested(&pool, &job_id).await? {
                 let finished_at = Utc::now().to_rfc3339();
@@ -3212,7 +3239,6 @@ async fn run_scan_job(
                 }
             }
 
-            let total_count = (result.candidates.len() as i64) + result.failed_count;
             let finished_at = Utc::now().to_rfc3339();
 
             upsert_source_scan_state(
