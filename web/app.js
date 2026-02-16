@@ -140,7 +140,8 @@ const el = {
 
   btnDrawerPrev: $("btnDrawerPrev"),
   btnDrawerNext: $("btnDrawerNext"),
-  photoDetail: $("photoDetail"),
+  photoDetailPrimary: $("photoDetailPrimary"),
+  photoDetailAdvanced: $("photoDetailAdvanced"),
   photoAlbums: $("photoAlbums"),
   photoRemark: $("photoRemark"),
   btnSaveRemark: $("btnSaveRemark"),
@@ -1135,13 +1136,18 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     }
     state.selectedPhotoAlbums = data.albums || [];
     const albumText = state.selectedPhotoAlbums.map((a) => a.name).join(" / ") || "-";
-    el.photoDetail.innerHTML = [
-      ["照片ID", p.id],
+    el.photoDetailPrimary.innerHTML = [
       ["文件名", p.file_name],
-      ["文件路径", p.file_path],
-      ["来源ID", p.source_id],
       ["拍摄时间", formatShotTime(p.sort_time)],
       ["所属相册", albumText],
+    ]
+      .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v || "-")}</p>`)
+      .join("");
+
+    el.photoDetailAdvanced.innerHTML = [
+      ["照片ID", p.id],
+      ["文件路径", p.file_path],
+      ["来源ID", p.source_id],
     ]
       .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v || "-")}</p>`)
       .join("");
