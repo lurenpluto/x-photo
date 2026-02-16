@@ -26,6 +26,7 @@ const state = {
   taskStatusFilter: "",
   taskJobTypeFilter: "",
   taskTriggerTypeFilter: "",
+  sourceById: {},
   detail: {
     active: false,
     type: null,
@@ -901,6 +902,11 @@ function renderSources(items) {
 async function loadSources() {
   try {
     const items = await api("/sources", { method: "GET" });
+    const next = {};
+    for (const src of items || []) {
+      if (src?.id) next[src.id] = src;
+    }
+    state.sourceById = next;
     renderSources(items);
   } catch (err) {
     el.sourceList.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
@@ -1267,6 +1273,37 @@ function parseTaskCheckpoint(raw) {
   }
 }
 
+function parseTaskPayload(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function getTaskSourceId(task, scanDetail) {
+  if (scanDetail?.source_id) return String(scanDetail.source_id);
+  const payload = parseTaskPayload(task?.payload_json);
+  if (payload?.source_id) return String(payload.source_id);
+  return "";
+}
+
+async function ensureSourceCache() {
+  if (Object.keys(state.sourceById).length > 0) return;
+  try {
+    const items = await api("/sources", { method: "GET" });
+    const next = {};
+    for (const src of items || []) {
+      if (src?.id) next[src.id] = src;
+    }
+    state.sourceById = next;
+  } catch (_err) {
+    // ignore source cache preload failures in status page
+  }
+}
+
 function formatTaskProgress(task) {
   const done = Number(task.progress_done || 0);
   const total = task.progress_total;
@@ -1285,6 +1322,14 @@ function taskStageText(task) {
   return "扫描进行中";
 }
 
+function taskSourceBrief(task) {
+  const sourceId = getTaskSourceId(task, null);
+  if (!sourceId) return "source: -";
+  const source = state.sourceById[sourceId];
+  if (!source) return `source: ${sourceId.slice(0, 10)}...`;
+  return `source: ${source.name}`;
+}
+
 function renderTaskOverview(data) {
   const active = data.active_tasks || [];
   const daemon = data.health?.daemon_tasks || [];
@@ -1300,6 +1345,7 @@ function renderTaskOverview(data) {
         <div>
           <p class="item-title">${escapeHtml(task.job_type)} · ${escapeHtml(task.trigger_type)}</p>
           <p class="item-sub">${task.id.slice(0, 14)}... · ${escapeHtml(formatTaskProgress(task))}</p>
+          <p class="item-sub">${escapeHtml(taskSourceBrief(task))}</p>
           <p class="item-sub">${escapeHtml(taskStageText(task))}</p>
         </div>
         ${taskTag(task.status)}
@@ -1327,6 +1373,7 @@ function renderTaskOverview(data) {
 
 async function loadTaskOverview() {
   try {
+    await ensureSourceCache();
     const data = await api("/task-jobs/overview", { method: "GET" });
     renderTaskOverview(data);
   } catch (err) {
@@ -1347,6 +1394,7 @@ function renderTaskList(items) {
         <div>
           <p class="item-title">${escapeHtml(task.job_type)} · ${escapeHtml(task.trigger_type)}</p>
           <p class="item-sub">${task.id.slice(0, 14)}... · ${task.started_at || "未启动"}</p>
+          <p class="item-sub">${escapeHtml(taskSourceBrief(task))}</p>
         </div>
         ${taskTag(task.status)}
       </article>
@@ -1368,6 +1416,7 @@ function renderTaskList(items) {
 async function loadTaskJobs(event) {
   if (event) event.preventDefault();
   try {
+    await ensureSourceCache();
     const jobType = el.taskJobType.value.trim();
     const triggerType = el.taskTriggerType.value.trim();
     const status = el.taskStatus.value.trim();
@@ -1417,6 +1466,7 @@ function setTaskActionButtons(task, scanJobStatus) {
 
 async function loadTaskDetail(taskId) {
   try {
+    await ensureSourceCache();
     const task = await api(`/task-jobs/${taskId}`, { method: "GET" });
     state.selectedTask = task;
     state.selectedTaskId = task.id;
@@ -1430,6 +1480,10 @@ async function loadTaskDetail(taskId) {
     }
 
     const scanStatus = scanDetail?.status || "-";
+    const sourceId = getTaskSourceId(task, scanDetail) || "-";
+    const source = state.sourceById[sourceId] || null;
+    const sourceName = source?.name || "-";
+    const sourcePath = source?.root_path || "-";
     state.selectedScanJobId = task.scan_job_id || null;
     el.taskDetailHint.textContent = `任务 ${task.id.slice(0, 12)}...`;
     renderTaskFlow(task.status);
@@ -1438,6 +1492,9 @@ async function loadTaskDetail(taskId) {
       ["task_id", task.id],
       ["status", task.status],
       ["trigger_type", task.trigger_type],
+      ["source_id", sourceId],
+      ["source_name", sourceName],
+      ["source_path", sourcePath],
       ["scan_job_id", task.scan_job_id || "-"],
       ["scan_status", scanStatus],
       ["progress", formatTaskProgress(task)],
