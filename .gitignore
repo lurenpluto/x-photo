@@ -1,4 +1,5 @@
 service/target/
+service/logs/
 *.db
 *.db-shm
 *.db-wal

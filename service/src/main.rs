@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 
 use axum::Router;
 use service::{api, config, db, logging};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{error, info};
 
 #[tokio::main]
@@ -31,9 +31,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "bootstrapping service with runtime inputs"
     );
 
+    let connect_opts = database_url
+        .parse::<SqliteConnectOptions>()
+        .map_err(|e| {
+            let msg = format!("failed to parse sqlite database url (url={}): {}", database_url, e);
+            error!("{}", msg);
+            msg
+        })?
+        .create_if_missing(true);
+
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(&database_url)
+        .connect_with(connect_opts)
         .await
         .map_err(|e| {
             let msg = format!("failed to connect sqlite database (url={}): {}", database_url, e);

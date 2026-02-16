@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use axum::{routing::get, routing::patch, routing::post, Router};
-use tower_http::cors::{Any, CorsLayer};
 use sqlx::SqlitePool;
 use tokio::sync::Semaphore;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
+use tracing::Level;
 
 use crate::config::AppConfig;
 
@@ -32,6 +34,12 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let trace = TraceLayer::new_for_http()
+        .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
+        .on_request(tower_http::trace::DefaultOnRequest::new().level(Level::INFO))
+        .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::INFO))
+        .on_failure(tower_http::trace::DefaultOnFailure::new().level(Level::ERROR));
+
     Router::new()
         .route("/rpc/v1/health", get(handlers::health))
         .route("/rpc/v1/sources", get(handlers::list_sources).post(handlers::create_source))
@@ -59,4 +67,5 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .route("/rpc/v1/albums/{album_id}/photos:remove", post(handlers::album_remove_photos))
         .with_state(state)
         .layer(cors)
+        .layer(trace)
 }
