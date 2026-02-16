@@ -805,6 +805,7 @@ pub async fn search_photos(
     let page_size = req.page_size.unwrap_or(100).clamp(1, 500);
     let offset = (page - 1) * page_size;
     let keyword = req.keyword.unwrap_or_default().trim().to_string();
+    let keyword_fts = build_fts_query(&keyword);
     let album_id = req.album_id.unwrap_or_default().trim().to_string();
     let source_id = req.source_id.unwrap_or_default().trim().to_string();
     let start_time = req.start_time.unwrap_or_default().trim().to_string();
@@ -829,6 +830,7 @@ pub async fn search_photos(
     apply_photo_search_filters(
         &mut count_builder,
         &keyword,
+        keyword_fts.as_deref(),
         &album_id,
         &source_id,
         &start_time,
@@ -863,6 +865,7 @@ pub async fn search_photos(
     apply_photo_search_filters(
         &mut list_builder,
         &keyword,
+        keyword_fts.as_deref(),
         &album_id,
         &source_id,
         &start_time,
@@ -910,6 +913,7 @@ pub async fn search_photos(
 fn apply_photo_search_filters(
     builder: &mut QueryBuilder<Sqlite>,
     keyword: &str,
+    keyword_fts: Option<&str>,
     album_id: &str,
     source_id: &str,
     start_time: &str,
@@ -917,7 +921,17 @@ fn apply_photo_search_filters(
 ) {
     if !keyword.is_empty() {
         let like = format!("%{}%", keyword);
-        builder.push(" AND (p.file_name LIKE ");
+        builder.push(" AND (");
+
+        if let Some(fts_query) = keyword_fts {
+            builder.push(
+                " EXISTS (SELECT 1 FROM photo_search_fts f WHERE f.photo_id = p.id AND f.search_text MATCH ",
+            );
+            builder.push_bind(fts_query.to_string());
+            builder.push(") OR ");
+        }
+
+        builder.push(" (p.file_name LIKE ");
         builder.push_bind(like.clone());
         builder.push(" OR p.file_path LIKE ");
         builder.push_bind(like.clone());
@@ -933,7 +947,7 @@ fn apply_photo_search_filters(
         );
         builder.push_bind(like);
         builder.push(")");
-        builder.push(")");
+        builder.push(") )");
     }
 
     if !album_id.is_empty() {
@@ -957,6 +971,25 @@ fn apply_photo_search_filters(
     if !end_time.is_empty() {
         builder.push(" AND p.sort_time <= ");
         builder.push_bind(end_time.to_string());
+    }
+}
+
+fn build_fts_query(keyword: &str) -> Option<String> {
+    let tokens = keyword
+        .split_whitespace()
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>()
+        })
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("{}*", t))
+        .collect::<Vec<_>>();
+
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" AND "))
     }
 }
 
@@ -1435,6 +1468,21 @@ pub async fn update_photo_remark(
         )
     })?;
 
+    if result.rows_affected() > 0 {
+        rebuild_photo_search_index_for_photo(&state.pool, &photo_id)
+            .await
+            .map_err(|msg| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse {
+                        code: 500,
+                        message: msg,
+                        data: json!({}),
+                    }),
+                )
+            })?;
+    }
+
     Ok(Json(ApiResponse::ok(BatchOperationResult {
         affected: result.rows_affected() as i64,
     })))
@@ -1471,6 +1519,9 @@ pub async fn batch_delete_photos(
             )
         })?;
         affected += result.rows_affected() as i64;
+        if result.rows_affected() > 0 {
+            let _ = remove_photo_search_index_for_photo(&state.pool, photo_id).await;
+        }
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -1523,6 +1574,9 @@ pub async fn batch_add_to_album(
             )
         })?;
         affected += result.rows_affected() as i64;
+        if result.rows_affected() > 0 {
+            let _ = rebuild_photo_search_index_for_photo(&state.pool, photo_id).await;
+        }
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -1579,6 +1633,12 @@ pub async fn update_album(
             err,
         )
     })?;
+
+    if result.rows_affected() > 0 {
+        if let Ok(photo_ids) = fetch_photo_ids_by_album(&state.pool, &album_id).await {
+            let _ = rebuild_photo_search_index_for_photo_ids(&state.pool, &photo_ids).await;
+        }
+    }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult {
         affected: result.rows_affected() as i64,
@@ -1648,6 +1708,9 @@ pub async fn album_add_photos(
             )
         })?;
         affected += result.rows_affected() as i64;
+        if result.rows_affected() > 0 {
+            let _ = rebuild_photo_search_index_for_photo(&state.pool, photo_id).await;
+        }
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -1680,6 +1743,9 @@ pub async fn album_remove_photos(
             )
         })?;
         affected += result.rows_affected() as i64;
+        if result.rows_affected() > 0 {
+            let _ = rebuild_photo_search_index_for_photo(&state.pool, photo_id).await;
+        }
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -1729,6 +1795,10 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
 
         if let Err(e) = bootstrap_failed_sources_for_retry(state.clone()).await {
             error!(error = %e, "failed to bootstrap failed sources for retry");
+        }
+
+        if let Err(e) = rebuild_photo_search_index_all(&state.pool).await {
+            error!(error = %e, "failed to rebuild photo search index on startup");
         }
 
         let mut source_fingerprints: HashMap<String, String> = HashMap::new();
@@ -2673,6 +2743,7 @@ async fn run_scan_job(
             let now = Utc::now().to_rfc3339();
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
+            let mut touched_photo_ids: HashSet<String> = HashSet::new();
             let mut last_scanned_path: Option<String> = None;
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
@@ -2869,6 +2940,8 @@ async fn run_scan_job(
                     continue;
                 }
 
+                touched_photo_ids.insert(photo_id.clone());
+
                 match ensure_album_by_dir_rule(
                     &pool,
                     &source.id,
@@ -2894,6 +2967,13 @@ async fn run_scan_job(
                             "auto album linking failed"
                         );
                     }
+                }
+            }
+
+            if !touched_photo_ids.is_empty() {
+                let touched = touched_photo_ids.into_iter().collect::<Vec<_>>();
+                if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &touched).await {
+                    warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for touched photos");
                 }
             }
 
@@ -3290,5 +3370,101 @@ async fn upsert_source_scan_state(
         msg
     })?;
 
+    Ok(())
+}
+
+async fn fetch_photo_ids_by_album(pool: &SqlitePool, album_id: &str) -> Result<Vec<String>, String> {
+    sqlx::query_scalar(
+        "SELECT pa.photo_id
+         FROM photo_albums pa
+         INNER JOIN photos p ON p.id = pa.photo_id
+         WHERE pa.album_id = ? AND p.deleted_at IS NULL",
+    )
+    .bind(album_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("failed to fetch photo ids by album (album_id={}): {}", album_id, e))
+}
+
+async fn rebuild_photo_search_index_all(pool: &SqlitePool) -> Result<(), String> {
+    sqlx::query("DELETE FROM photo_search_fts")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("failed to clear photo_search_fts: {}", e))?;
+
+    let photo_ids = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM photos WHERE deleted_at IS NULL ORDER BY created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("failed to list photos for search index rebuild: {}", e))?;
+
+    rebuild_photo_search_index_for_photo_ids(pool, &photo_ids).await
+}
+
+async fn rebuild_photo_search_index_for_photo_ids(
+    pool: &SqlitePool,
+    photo_ids: &[String],
+) -> Result<(), String> {
+    for photo_id in photo_ids {
+        rebuild_photo_search_index_for_photo(pool, photo_id).await?;
+    }
+    Ok(())
+}
+
+async fn rebuild_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
+    let row = sqlx::query(
+        "SELECT p.id,
+                IFNULL(p.file_name, '') AS file_name,
+                IFNULL(p.file_path, '') AS file_path,
+                IFNULL(p.remark, '') AS remark,
+                IFNULL(p.exif_json, '') AS exif_json,
+                IFNULL(p.sort_time, '') AS sort_time,
+                IFNULL(GROUP_CONCAT(a.name, ' '), '') AS album_names
+         FROM photos p
+         LEFT JOIN photo_albums pa ON pa.photo_id = p.id
+         LEFT JOIN albums a ON a.id = pa.album_id
+         WHERE p.id = ? AND p.deleted_at IS NULL
+         GROUP BY p.id",
+    )
+    .bind(photo_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("failed to fetch photo for search index rebuild (photo_id={}): {}", photo_id, e))?;
+
+    if row.is_none() {
+        return remove_photo_search_index_for_photo(pool, photo_id).await;
+    }
+
+    let row = row.expect("checked some");
+    let file_name: String = row.get("file_name");
+    let file_path: String = row.get("file_path");
+    let remark: String = row.get("remark");
+    let exif_json: String = row.get("exif_json");
+    let sort_time: String = row.get("sort_time");
+    let album_names: String = row.get("album_names");
+
+    let search_text = format!(
+        "{} {} {} {} {} {}",
+        file_name, file_path, remark, exif_json, album_names, sort_time
+    );
+
+    remove_photo_search_index_for_photo(pool, photo_id).await?;
+    sqlx::query("INSERT INTO photo_search_fts (photo_id, search_text) VALUES (?, ?)")
+        .bind(photo_id)
+        .bind(search_text)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("failed to insert photo_search_fts row (photo_id={}): {}", photo_id, e))?;
+
+    Ok(())
+}
+
+async fn remove_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
+    sqlx::query("DELETE FROM photo_search_fts WHERE photo_id = ?")
+        .bind(photo_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("failed to delete photo_search_fts row (photo_id={}): {}", photo_id, e))?;
     Ok(())
 }

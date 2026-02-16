@@ -123,6 +123,12 @@ CREATE TABLE IF NOT EXISTS photo_features (
   FOREIGN KEY (photo_id) REFERENCES photos (id)
 );
 
+CREATE VIRTUAL TABLE IF NOT EXISTS photo_search_fts USING fts5(
+  photo_id UNINDEXED,
+  search_text,
+  tokenize = 'unicode61'
+);
+
 CREATE INDEX IF NOT EXISTS idx_photos_sort_time ON photos (sort_time DESC);
 CREATE INDEX IF NOT EXISTS idx_photos_shot_at ON photos (shot_at);
 CREATE INDEX IF NOT EXISTS idx_photos_file_name ON photos (file_name);
