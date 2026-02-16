@@ -1066,33 +1066,61 @@ fn parse_keyword_search(keyword: &str) -> KeywordSearchParts {
     let mut out = KeywordSearchParts::default();
     let mut free_terms = Vec::new();
 
-    for token in keyword.split_whitespace() {
+    let tokens = keyword.split_whitespace().collect::<Vec<_>>();
+    let mut i = 0_usize;
+    while i < tokens.len() {
+        let token = tokens[i];
         if token.is_empty() {
+            i += 1;
             continue;
         }
 
         let Some((prefix, value_raw)) = token.split_once(':') else {
             free_terms.push(token.to_string());
+            i += 1;
             continue;
         };
 
-        let value = value_raw.trim();
-        if value.is_empty() {
+        let key = prefix.to_ascii_lowercase();
+        let recognized = matches!(
+            key.as_str(),
+            "album" | "remark" | "path" | "exif" | "camera" | "lens" | "source" | "date"
+        );
+
+        if !recognized {
             free_terms.push(token.to_string());
+            i += 1;
             continue;
         }
 
-        match prefix.to_ascii_lowercase().as_str() {
-            "album" => out.album_terms.push(value.to_string()),
-            "remark" => out.remark_terms.push(value.to_string()),
-            "path" => out.path_terms.push(value.to_string()),
-            "exif" => out.exif_terms.push(value.to_string()),
-            "camera" => out.camera_terms.push(value.to_string()),
-            "lens" => out.lens_terms.push(value.to_string()),
-            "source" => out.source_terms.push(value.to_string()),
-            "date" => out.date_terms.push(value.to_string()),
-            _ => free_terms.push(token.to_string()),
+        let mut value = value_raw.trim().to_string();
+        if value.is_empty() && i + 1 < tokens.len() {
+            let next = tokens[i + 1];
+            if !next.contains(':') {
+                value = next.to_string();
+                i += 1;
+            }
         }
+
+        if value.is_empty() {
+            free_terms.push(token.to_string());
+            i += 1;
+            continue;
+        }
+
+        match key.as_str() {
+            "album" => out.album_terms.push(value),
+            "remark" => out.remark_terms.push(value),
+            "path" => out.path_terms.push(value),
+            "exif" => out.exif_terms.push(value),
+            "camera" => out.camera_terms.push(value),
+            "lens" => out.lens_terms.push(value),
+            "source" => out.source_terms.push(value),
+            "date" => out.date_terms.push(value),
+            _ => {}
+        }
+
+        i += 1;
     }
 
     out.free_keyword = free_terms.join(" ");

@@ -154,6 +154,16 @@ async fn scan_and_search_should_work() {
     assert_eq!(prefixed_search["code"], 0);
     assert!(prefixed_search["data"]["total"].as_i64().unwrap_or(0) >= 1);
 
+    let spaced_prefixed_search = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/photos/search",
+        Some(json!({"keyword": "album: Test.Album", "page": 1, "page_size": 20})),
+    )
+    .await;
+    assert_eq!(spaced_prefixed_search["code"], 0);
+    assert!(spaced_prefixed_search["data"]["total"].as_i64().unwrap_or(0) >= 1);
+
     let albums_resp = call_json(&app, Method::GET, "/rpc/v1/albums", None).await;
     assert_eq!(albums_resp["code"], 0);
     let albums = albums_resp["data"].as_array().cloned().unwrap_or_default();
