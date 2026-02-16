@@ -31,6 +31,29 @@ SERVICE_PID=""
 WEB_PID=""
 SERVICE_PID_FILE="$ROOT_DIR/.service.pid"
 WEB_PID_FILE="$ROOT_DIR/.web.pid"
+SERVICE_LOG="$ROOT_DIR/.service.log"
+WEB_LOG="$ROOT_DIR/.web.log"
+
+show_log_tail() {
+  local log_file="$1"
+  local label="$2"
+  if [[ -f "$log_file" ]]; then
+    echo "[x-photo] ---- $label (last 25 lines) ----"
+    tail -n 25 "$log_file"
+  fi
+}
+
+assert_alive() {
+  local pid="$1"
+  local name="$2"
+  local log_file="$3"
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    echo "[x-photo] $name failed shortly after startup."
+    echo "[x-photo] Common reason: port already in use."
+    show_log_tail "$log_file" "$name log"
+    exit 1
+  fi
+}
 
 cleanup() {
   if [[ -n "$SERVICE_PID" ]] && kill -0 "$SERVICE_PID" >/dev/null 2>&1; then
@@ -45,19 +68,23 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[x-photo] Starting service on http://$SERVICE_HOST:$SERVICE_PORT ..."
-BIND_ADDR="$SERVICE_HOST:$SERVICE_PORT" cargo run --manifest-path "$SERVICE_DIR/Cargo.toml" >"$ROOT_DIR/.service.log" 2>&1 &
+BIND_ADDR="$SERVICE_HOST:$SERVICE_PORT" cargo run --manifest-path "$SERVICE_DIR/Cargo.toml" >"$SERVICE_LOG" 2>&1 &
 SERVICE_PID=$!
 printf "%s" "$SERVICE_PID" >"$SERVICE_PID_FILE"
 
 echo "[x-photo] Starting web on http://$WEB_HOST:$WEB_PORT ..."
-"$PYTHON_CMD" -m http.server "$WEB_PORT" --bind "$WEB_HOST" --directory "$WEB_DIR" >"$ROOT_DIR/.web.log" 2>&1 &
+"$PYTHON_CMD" -m http.server "$WEB_PORT" --bind "$WEB_HOST" --directory "$WEB_DIR" >"$WEB_LOG" 2>&1 &
 WEB_PID=$!
 printf "%s" "$WEB_PID" >"$WEB_PID_FILE"
+
+sleep 1
+assert_alive "$SERVICE_PID" "service" "$SERVICE_LOG"
+assert_alive "$WEB_PID" "web" "$WEB_LOG"
 
 echo "[x-photo] Ready"
 echo "  - Web: http://$WEB_HOST:$WEB_PORT"
 echo "  - API: http://$SERVICE_HOST:$SERVICE_PORT/rpc/v1"
-echo "[x-photo] Logs: $ROOT_DIR/.service.log, $ROOT_DIR/.web.log"
+echo "[x-photo] Logs: $SERVICE_LOG, $WEB_LOG"
 echo "[x-photo] Pid files: $SERVICE_PID_FILE, $WEB_PID_FILE"
 echo "[x-photo] Press Ctrl+C to stop both services."
 

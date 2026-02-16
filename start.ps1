@@ -12,6 +12,43 @@ function Get-EnvOrDefault {
   return $value
 }
 
+function Show-LogTail {
+  param(
+    [string]$Path,
+    [string]$Label,
+    [int]$Lines = 25
+  )
+
+  if (-not (Test-Path $Path)) {
+    return
+  }
+
+  Write-Host "[x-photo] ---- $Label (last $Lines lines) ----"
+  Get-Content -Path $Path -Tail $Lines | ForEach-Object { Write-Host $_ }
+}
+
+function Assert-ProcessAlive {
+  param(
+    [System.Diagnostics.Process]$Process,
+    [string]$Name,
+    [string]$StdoutLog,
+    [string]$StderrLog
+  )
+
+  if (-not $Process) {
+    throw "[x-photo] $Name process failed to start"
+  }
+
+  $Process.Refresh()
+  if ($Process.HasExited) {
+    Write-Host "[x-photo] $Name failed shortly after startup (exit=$($Process.ExitCode))."
+    Write-Host "[x-photo] Common reason: port already in use."
+    Show-LogTail -Path $StderrLog -Label "$Name stderr"
+    Show-LogTail -Path $StdoutLog -Label "$Name stdout"
+    throw "[x-photo] $Name startup failed"
+  }
+}
+
 $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serviceManifest = Join-Path $rootDir "service/Cargo.toml"
 $webDir = Join-Path $rootDir "web"
@@ -59,6 +96,10 @@ try {
   $webArgs = @() + $pythonArgsPrefix + @("-m", "http.server", $webPort, "--bind", $webHost, "--directory", $webDir)
   $webProc = Start-Process -FilePath $pythonExe -ArgumentList $webArgs -WorkingDirectory $rootDir -RedirectStandardOutput $webLog -RedirectStandardError $webErrLog -PassThru
   Set-Content -Path $webPidFile -Value $webProc.Id -NoNewline
+
+  Start-Sleep -Milliseconds 900
+  Assert-ProcessAlive -Process $serviceProc -Name "service" -StdoutLog $serviceLog -StderrLog $serviceErrLog
+  Assert-ProcessAlive -Process $webProc -Name "web" -StdoutLog $webLog -StderrLog $webErrLog
 
   Write-Host "[x-photo] Ready"
   Write-Host "  - Web: http://$webHost`:$webPort"
