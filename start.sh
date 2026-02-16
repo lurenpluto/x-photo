@@ -68,7 +68,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "[x-photo] Starting service on http://$SERVICE_HOST:$SERVICE_PORT ..."
-BIND_ADDR="$SERVICE_HOST:$SERVICE_PORT" cargo run --manifest-path "$SERVICE_DIR/Cargo.toml" >"$SERVICE_LOG" 2>&1 &
+BIND_ADDR="$SERVICE_HOST:$SERVICE_PORT" cargo run --manifest-path "$SERVICE_DIR/Cargo.toml" --bin service >"$SERVICE_LOG" 2>&1 &
 SERVICE_PID=$!
 printf "%s" "$SERVICE_PID" >"$SERVICE_PID_FILE"
 

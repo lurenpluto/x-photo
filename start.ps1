@@ -89,7 +89,7 @@ $webProc = $null
 
 try {
   Write-Host "[x-photo] Starting service on http://$serviceHost`:$servicePort ..."
-  $serviceProc = Start-Process -FilePath "cargo" -ArgumentList @("run", "--manifest-path", $serviceManifest) -WorkingDirectory $rootDir -RedirectStandardOutput $serviceLog -RedirectStandardError $serviceErrLog -PassThru
+  $serviceProc = Start-Process -FilePath "cargo" -ArgumentList @("run", "--manifest-path", $serviceManifest, "--bin", "service") -WorkingDirectory $rootDir -RedirectStandardOutput $serviceLog -RedirectStandardError $serviceErrLog -PassThru
   Set-Content -Path $servicePidFile -Value $serviceProc.Id -NoNewline
 
   Write-Host "[x-photo] Starting web on http://$webHost`:$webPort ..."

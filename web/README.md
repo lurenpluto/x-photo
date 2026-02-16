@@ -40,7 +40,7 @@ start.bat
 
 ```bash
 cd service
-cargo run
+cargo run --bin service
 ```
 
 2. 启动静态文件服务：
