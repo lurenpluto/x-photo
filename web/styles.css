@@ -53,6 +53,7 @@ body {
   border: 1px solid var(--panel-border);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+  min-width: 0;
 }
 
 .sidebar {
@@ -320,6 +321,7 @@ body {
 .tab-panel {
   display: none;
   gap: 0.55rem;
+  min-width: 0;
 }
 
 .tab-panel.active {
@@ -450,6 +452,8 @@ textarea {
   cursor: grab;
   scrollbar-width: thin;
   scroll-behavior: smooth;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .album-row.dragging {
