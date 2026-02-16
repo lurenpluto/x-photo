@@ -3,3 +3,5 @@ service/logs/
 *.db
 *.db-shm
 *.db-wal
+.service.log
+.web.log
