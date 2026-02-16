@@ -1,4 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use std::io::Write;
 
 use chrono::{Datelike, NaiveDate, Weekday};
 use filetime::{set_file_mtime, FileTime};
@@ -51,6 +54,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let total = plans.len();
+    println!(
+        "planning completed: strategy={} year={} seed={} total_photos={}",
+        strategy, year, seed, total
+    );
+
+    let started_at = Instant::now();
+    let mut last_progress_at = started_at;
+
     let mut generated = 0_usize;
     for plan in plans {
         let dir_path = output_dir.join(&plan.album_dir_name);
@@ -63,7 +75,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ft = FileTime::from_unix_time(plan.mtime_unix, 0);
         set_file_mtime(&file_path, ft)?;
         generated += 1;
+
+        let now = Instant::now();
+        if generated == total
+            || generated == 1
+            || generated % 100 == 0
+            || now.duration_since(last_progress_at).as_secs_f64() >= 0.8
+        {
+            last_progress_at = now;
+            render_progress(generated, total, started_at)?;
+        }
     }
+
+    println!();
 
     println!(
         "test data generated at {} (strategy={}, photos={})",
@@ -71,6 +95,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         strategy,
         generated
     );
+    Ok(())
+}
+
+fn render_progress(
+    generated: usize,
+    total: usize,
+    started_at: Instant,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let width = 34_usize;
+    let ratio = if total == 0 {
+        1.0
+    } else {
+        generated as f64 / total as f64
+    }
+    .clamp(0.0, 1.0);
+
+    let filled = (ratio * width as f64).round() as usize;
+    let empty = width.saturating_sub(filled);
+    let bar = format!("{}{}", "#".repeat(filled), "-".repeat(empty));
+
+    let elapsed = started_at.elapsed().as_secs_f64();
+    let rate = if elapsed > 0.0 {
+        generated as f64 / elapsed
+    } else {
+        0.0
+    };
+    let remaining = total.saturating_sub(generated);
+    let eta_secs = if rate > 0.0 {
+        (remaining as f64 / rate).round() as u64
+    } else {
+        0
+    };
+
+    print!(
+        "\rprogress [{}] {:>6.2}% ({}/{}) rate={:>6.1} img/s eta={}s",
+        bar,
+        ratio * 100.0,
+        generated,
+        total,
+        rate,
+        eta_secs,
+    );
+    std::io::stdout().flush()?;
     Ok(())
 }
 
