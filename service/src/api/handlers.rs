@@ -2786,6 +2786,38 @@ async fn update_scan_checkpoint(
     Ok(())
 }
 
+async fn update_scan_running_progress(
+    pool: &SqlitePool,
+    job_id: &str,
+    processed_count: i64,
+    total_count: i64,
+    failed_count: i64,
+    resume_cursor_path: Option<&str>,
+    stage_message: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        "UPDATE scan_jobs
+         SET processed_count = ?, total_count = ?, failed_count = ?,
+             resume_cursor_path = ?, error_message = ?
+         WHERE id = ?",
+    )
+    .bind(processed_count)
+    .bind(total_count)
+    .bind(failed_count)
+    .bind(resume_cursor_path)
+    .bind(stage_message)
+    .bind(job_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        format!(
+            "failed to update running progress (job_id={}, processed_count={}, total_count={}): {}",
+            job_id, processed_count, total_count, e
+        )
+    })?;
+    Ok(())
+}
+
 async fn run_scan_job(
     pool: SqlitePool,
     job_id: String,
@@ -2873,9 +2905,9 @@ async fn run_scan_job(
         })?;
         entries.sort_by_key(|e| e.path.to_string_lossy().to_string());
 
-        let mut candidates: Vec<ScannedPhotoCandidate> = Vec::new();
-        let mut failed_count: i64 = 0;
-        let mut first_error: Option<String> = None;
+        let mut entries_out: Vec<ScannedPhotoEntry> = Vec::new();
+        let failed_count: i64 = 0;
+        let first_error: Option<String> = None;
         let mut resume_reached = resume_cursor_for_collect.is_none();
 
         for entry in entries {
@@ -2899,40 +2931,6 @@ async fn run_scan_job(
                 .unwrap_or_else(|| file_path.clone());
             let file_ext = file_ext_lowercase(&entry.path);
 
-            let storage_file_id = match adapter.canonical_id(&file_path) {
-                Ok(v) => v,
-                Err(e) => {
-                    failed_count += 1;
-                    let msg = format!("failed to get canonical_id for {}: {}", file_path, e);
-                    warn!("{}", msg);
-                    if first_error.is_none() {
-                        first_error = Some(msg);
-                    }
-                    continue;
-                }
-            };
-
-            let content_hash = match adapter.sha256(&file_path) {
-                Ok(v) => v,
-                Err(e) => {
-                    failed_count += 1;
-                    let msg = format!("failed to calculate sha256 for {}: {}", file_path, e);
-                    warn!("{}", msg);
-                    if first_error.is_none() {
-                        first_error = Some(msg);
-                    }
-                    continue;
-                }
-            };
-
-            let (shot_at, exif_json) = match parse_exif_for_scan(&file_path) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(file_path = file_path, error = %e, "failed to parse exif, fallback to fs time");
-                    (None, None)
-                }
-            };
-
             let created_at_fs = entry
                 .created_at
                 .map(|t| DateTime::<Utc>::from(t).to_rfc3339());
@@ -2941,30 +2939,24 @@ async fn run_scan_job(
                 .modified_at
                 .map(|t| DateTime::<Utc>::from(t).to_rfc3339());
 
-            let sort_time = shot_at
+            let sort_time = created_at_fs
                 .clone()
-                .or_else(|| created_at_fs.clone())
                 .or_else(|| modified_at_fs.clone())
                 .unwrap_or_else(|| Utc::now().to_rfc3339());
 
-            candidates.push(ScannedPhotoCandidate {
-                storage_file_id,
+            entries_out.push(ScannedPhotoEntry {
                 file_path,
                 file_name,
                 file_ext: file_ext.clone(),
                 file_size: std::cmp::min(entry.size, i64::MAX as u64) as i64,
-                mime_type: mime_from_ext(file_ext.as_deref()),
-                content_hash,
-                shot_at,
                 created_at_fs,
                 modified_at_fs,
                 sort_time,
-                exif_json,
             });
         }
 
         Ok::<ScanCollectResult, String>(ScanCollectResult {
-            candidates,
+            entries: entries_out,
             failed_count,
             first_error,
         })
@@ -2982,9 +2974,10 @@ async fn run_scan_job(
             let mut updated_count: i64 = 0;
             let mut skipped_count: i64 = 0;
             let mut failed_count: i64 = result.failed_count;
+            let mut first_error = result.first_error;
             let mut processed_count: i64 = 0;
-            let now = Utc::now().to_rfc3339();
-            let total_count = (result.candidates.len() as i64) + result.failed_count;
+            let collect_target_count = result.entries.len() as i64;
+            let total_count = collect_target_count + result.failed_count;
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
             let mut touched_photo_ids: HashSet<String> = HashSet::new();
@@ -2992,6 +2985,147 @@ async fn run_scan_job(
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
             let mut last_scanned_content_hash: Option<String> = None;
+            let mut candidates: Vec<ScannedPhotoCandidate> = Vec::new();
+            let mut collect_processed: i64 = 0;
+
+            update_scan_running_progress(
+                &pool,
+                &job_id,
+                0,
+                total_count,
+                failed_count,
+                None,
+                &format!("collecting photo metadata and fingerprints (0/{})", total_count),
+            )
+            .await?;
+
+            for entry in &result.entries {
+                if is_cancel_requested(&pool, &job_id).await? {
+                    let finished_at = Utc::now().to_rfc3339();
+                    sqlx::query(
+                        "UPDATE scan_jobs
+                         SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
+                         WHERE id = ?",
+                    )
+                    .bind(&finished_at)
+                    .bind(collect_processed)
+                    .bind(last_scanned_path.as_deref())
+                    .bind(total_count)
+                    .bind(new_count)
+                    .bind(updated_count)
+                    .bind(failed_count)
+                    .bind("cancel requested during metadata collection")
+                    .bind(&job_id)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "failed to switch scan job {} status running->cancelled for source {}: {}",
+                            job_id, source.id, e
+                        )
+                    })?;
+
+                    upsert_source_scan_state(
+                        &pool,
+                        &source.id,
+                        "cancelled",
+                        Some(&running_at),
+                        Some(&finished_at),
+                        last_scanned_path.as_deref(),
+                        None,
+                        last_scanned_modified_at.as_deref(),
+                        None,
+                        Some("cancel requested during metadata collection"),
+                    )
+                    .await?;
+
+                    info!(job_id, source_id = source.id, from = "running", to = "cancelled", "scan job status transition");
+                    return Ok(());
+                }
+
+                let entry_for_collect = entry.clone();
+                let candidate_result = tokio::task::spawn_blocking(move || {
+                    let adapter = LocalFsAdapter::new(false);
+                    let storage_file_id = adapter
+                        .canonical_id(&entry_for_collect.file_path)
+                        .map_err(|e| format!("failed to get canonical_id for {}: {}", entry_for_collect.file_path, e))?;
+                    let content_hash = adapter
+                        .sha256(&entry_for_collect.file_path)
+                        .map_err(|e| format!("failed to calculate sha256 for {}: {}", entry_for_collect.file_path, e))?;
+
+                    let (shot_at, exif_json) = match parse_exif_for_scan(&entry_for_collect.file_path) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!(file_path = entry_for_collect.file_path, error = %e, "failed to parse exif, fallback to fs time");
+                            (None, None)
+                        }
+                    };
+
+                    let sort_time = shot_at
+                        .clone()
+                        .unwrap_or_else(|| entry_for_collect.sort_time.clone());
+                    let mime_type = mime_from_ext(entry_for_collect.file_ext.as_deref());
+
+                    Ok::<ScannedPhotoCandidate, String>(ScannedPhotoCandidate {
+                        storage_file_id,
+                        file_path: entry_for_collect.file_path,
+                        file_name: entry_for_collect.file_name,
+                        file_ext: entry_for_collect.file_ext,
+                        file_size: entry_for_collect.file_size,
+                        mime_type,
+                        content_hash,
+                        shot_at,
+                        created_at_fs: entry_for_collect.created_at_fs,
+                        modified_at_fs: entry_for_collect.modified_at_fs,
+                        sort_time,
+                        exif_json,
+                    })
+                })
+                .await
+                .map_err(|e| {
+                    format!(
+                        "scan metadata collect join failed for job {} and source {}: {}",
+                        job_id, source.id, e
+                    )
+                })?;
+
+                collect_processed += 1;
+                last_scanned_path = Some(entry.file_path.clone());
+                last_scanned_modified_at = entry.modified_at_fs.clone();
+
+                match candidate_result {
+                    Ok(candidate) => {
+                        candidates.push(candidate);
+                    }
+                    Err(e) => {
+                        failed_count += 1;
+                        warn!(job_id, source_id = source.id, error = %e, "photo metadata collect failed");
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                        }
+                    }
+                }
+
+                if collect_processed % (checkpoint_every as i64) == 0 || collect_processed == collect_target_count {
+                    let stage = format!(
+                        "collecting photo metadata and fingerprints ({}/{})",
+                        collect_processed, total_count
+                    );
+                    update_scan_running_progress(
+                        &pool,
+                        &job_id,
+                        collect_processed,
+                        total_count,
+                        failed_count,
+                        last_scanned_path.as_deref(),
+                        &stage,
+                    )
+                    .await?;
+                }
+            }
+
+            let stage2_total_count = candidates.len() as i64;
+            let now = Utc::now().to_rfc3339();
 
             sqlx::query(
                 "UPDATE scan_jobs
@@ -2999,7 +3133,7 @@ async fn run_scan_job(
                      error_message = 'processing photo metadata and writing database records'
                  WHERE id = ?",
             )
-            .bind(total_count)
+            .bind(stage2_total_count)
             .bind(failed_count)
             .bind(&job_id)
             .execute(&pool)
@@ -3021,7 +3155,7 @@ async fn run_scan_job(
                 .bind(&finished_at)
                 .bind(processed_count)
                 .bind(last_scanned_path.as_deref())
-                .bind(result.candidates.len() as i64)
+                .bind(stage2_total_count)
                 .bind(new_count)
                 .bind(updated_count)
                 .bind(failed_count)
@@ -3054,7 +3188,7 @@ async fn run_scan_job(
                 return Ok(());
             }
 
-            for candidate in &result.candidates {
+            for candidate in &candidates {
                 if is_cancel_requested(&pool, &job_id).await? {
                     let finished_at = Utc::now().to_rfc3339();
                     sqlx::query(
@@ -3065,7 +3199,7 @@ async fn run_scan_job(
                     .bind(&finished_at)
                     .bind(processed_count)
                     .bind(last_scanned_path.as_deref())
-                    .bind(result.candidates.len() as i64)
+                    .bind(stage2_total_count)
                     .bind(new_count)
                     .bind(updated_count)
                     .bind(failed_count)
@@ -3251,7 +3385,7 @@ async fn run_scan_job(
                 last_scanned_storage_file_id.as_deref(),
                 last_scanned_modified_at.as_deref(),
                 last_scanned_content_hash.as_deref(),
-                result.first_error.as_deref(),
+                first_error.as_deref(),
             )
             .await?;
 
@@ -3267,7 +3401,7 @@ async fn run_scan_job(
             .bind(new_count)
             .bind(updated_count)
             .bind(failed_count)
-            .bind(result.first_error.as_deref())
+            .bind(first_error.as_deref())
             .bind(&job_id)
             .execute(&pool)
             .await
@@ -3341,9 +3475,20 @@ async fn run_scan_job(
 
 #[derive(Debug)]
 struct ScanCollectResult {
-    candidates: Vec<ScannedPhotoCandidate>,
+    entries: Vec<ScannedPhotoEntry>,
     failed_count: i64,
     first_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ScannedPhotoEntry {
+    file_path: String,
+    file_name: String,
+    file_ext: Option<String>,
+    file_size: i64,
+    created_at_fs: Option<String>,
+    modified_at_fs: Option<String>,
+    sort_time: String,
 }
 
 #[derive(Debug)]

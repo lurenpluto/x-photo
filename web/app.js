@@ -1257,6 +1257,34 @@ function taskTag(status) {
   return `<span class="tag ${warn ? "warn" : ""}">${escapeHtml(status)}</span>`;
 }
 
+function parseTaskCheckpoint(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function formatTaskProgress(task) {
+  const done = Number(task.progress_done || 0);
+  const total = task.progress_total;
+  if (Number.isFinite(total) && total > 0) {
+    const percent = Math.min(100, Math.round((done * 1000) / total) / 10);
+    return `${done}/${total} (${percent}%)`;
+  }
+  return `${done}/${total ?? "-"}`;
+}
+
+function taskStageText(task) {
+  if (task.status !== "running") return "-";
+  if (task.error_message) return task.error_message;
+  const checkpoint = parseTaskCheckpoint(task.checkpoint_json);
+  if (checkpoint?.scan_status === "pending") return "等待扫描任务启动";
+  return "扫描进行中";
+}
+
 function renderTaskOverview(data) {
   const active = data.active_tasks || [];
   const daemon = data.health?.daemon_tasks || [];
@@ -1271,7 +1299,8 @@ function renderTaskOverview(data) {
       <div class="list-item">
         <div>
           <p class="item-title">${escapeHtml(task.job_type)} · ${escapeHtml(task.trigger_type)}</p>
-          <p class="item-sub">${task.id.slice(0, 14)}... · ${task.progress_done}/${task.progress_total ?? "-"}</p>
+          <p class="item-sub">${task.id.slice(0, 14)}... · ${escapeHtml(formatTaskProgress(task))}</p>
+          <p class="item-sub">${escapeHtml(taskStageText(task))}</p>
         </div>
         ${taskTag(task.status)}
       </div>
@@ -1411,8 +1440,9 @@ async function loadTaskDetail(taskId) {
       ["trigger_type", task.trigger_type],
       ["scan_job_id", task.scan_job_id || "-"],
       ["scan_status", scanStatus],
-      ["progress", `${task.progress_done}/${task.progress_total ?? "-"}`],
-      ["error", task.error_message || scanDetail?.error_message || "-"],
+      ["progress", formatTaskProgress(task)],
+      ["stage", taskStageText(task)],
+      ["error", task.status === "failed" || task.status === "cancelled" ? task.error_message || scanDetail?.error_message || "-" : "-"],
       ["started_at", task.started_at || "-"],
       ["finished_at", task.finished_at || scanDetail?.finished_at || "-"],
     ]
