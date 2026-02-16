@@ -26,6 +26,14 @@ const state = {
     tabBeforeOpen: "photos",
     current: null,
     stack: [],
+    photoView: {
+      scale: 1,
+      tx: 0,
+      ty: 0,
+      dragging: false,
+      dragStartX: 0,
+      dragStartY: 0,
+    },
   },
   albumDetail: {
     albumId: null,
@@ -107,8 +115,12 @@ const el = {
   photoDetailNav: $("photoDetailNav"),
   photoDetailPage: $("photoDetailPage"),
   photoPreviewImg: $("photoPreviewImg"),
+  btnPhotoZoomIn: $("btnPhotoZoomIn"),
+  btnPhotoZoomOut: $("btnPhotoZoomOut"),
+  btnPhotoZoomReset: $("btnPhotoZoomReset"),
   photoGeoText: $("photoGeoText"),
   photoGeoLink: $("photoGeoLink"),
+  photoExifMeta: $("photoExifMeta"),
   albumDetailPage: $("albumDetailPage"),
   albumDetailMeta: $("albumDetailMeta"),
   albumDetailPhotos: $("albumDetailPhotos"),
@@ -215,6 +227,71 @@ function setHealthText(text, ok = true) {
 
 function buildMapUrl(lat, lng) {
   return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
+}
+
+function parseExifJson(exifJson) {
+  if (!exifJson) return null;
+  if (typeof exifJson === "object") return exifJson;
+  if (typeof exifJson !== "string") return null;
+  try {
+    return JSON.parse(exifJson);
+  } catch (_err) {
+    return null;
+  }
+}
+
+function pickExif(exif, keys) {
+  if (!exif || typeof exif !== "object") return null;
+  for (const key of keys) {
+    const v = exif[key];
+    if (v !== undefined && v !== null && String(v).trim() !== "") {
+      return String(v);
+    }
+  }
+  return null;
+}
+
+function renderPhotoExif(p) {
+  const exif = parseExifJson(p.exif_json);
+  const rows = [
+    ["相机", pickExif(exif, ["Model", "CameraModelName", "camera_model"])],
+    ["镜头", pickExif(exif, ["LensModel", "Lens", "lens_model"])],
+    ["光圈", pickExif(exif, ["FNumber", "ApertureValue", "aperture"])],
+    ["快门", pickExif(exif, ["ExposureTime", "ShutterSpeedValue", "shutter"])],
+    ["ISO", pickExif(exif, ["ISOSpeedRatings", "ISO", "iso"])],
+    ["焦距", pickExif(exif, ["FocalLength", "focal_length"])],
+    ["尺寸", p.width && p.height ? `${p.width} x ${p.height}` : null],
+  ].filter(([, v]) => v);
+
+  if (!rows.length) {
+    el.photoExifMeta.innerHTML = "<p>状态</p><p>无可用 EXIF 参数</p>";
+    return;
+  }
+
+  el.photoExifMeta.innerHTML = rows.map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`).join("");
+}
+
+function resetPhotoView() {
+  state.detail.photoView.scale = 1;
+  state.detail.photoView.tx = 0;
+  state.detail.photoView.ty = 0;
+  applyPhotoTransform();
+}
+
+function applyPhotoTransform() {
+  const v = state.detail.photoView;
+  el.photoPreviewImg.style.transform = `translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+}
+
+function zoomPhoto(step) {
+  const v = state.detail.photoView;
+  const next = Math.min(5, Math.max(1, Number((v.scale + step).toFixed(2))));
+  v.scale = next;
+  if (v.scale === 1) {
+    v.tx = 0;
+    v.ty = 0;
+  }
+  applyPhotoTransform();
 }
 
 async function api(path, options = {}) {
@@ -914,6 +991,8 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     const v = Date.now();
     el.photoPreviewImg.src = `${state.apiBase}/photos/${photoId}/file?v=${v}`;
     el.photoPreviewImg.alt = p.file_name || "照片预览";
+    resetPhotoView();
+    renderPhotoExif(p);
 
     const lat = p.gps_lat;
     const lng = p.gps_lng;
@@ -1181,6 +1260,21 @@ function onKeydown(event) {
       moveDrawerPhoto(1);
       return;
     }
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      zoomPhoto(0.2);
+      return;
+    }
+    if (event.key === "-") {
+      event.preventDefault();
+      zoomPhoto(-0.2);
+      return;
+    }
+    if (event.key === "0") {
+      event.preventDefault();
+      resetPhotoView();
+      return;
+    }
   }
 
   if (state.tab !== "photos") {
@@ -1271,6 +1365,36 @@ function bindEvents() {
   el.btnDrawerNext.addEventListener("click", () => moveDrawerPhoto(1));
   el.btnSaveRemark.addEventListener("click", saveRemark);
   el.btnAddToAlbum.addEventListener("click", addPhotoToAlbum);
+  el.btnPhotoZoomIn.addEventListener("click", () => zoomPhoto(0.2));
+  el.btnPhotoZoomOut.addEventListener("click", () => zoomPhoto(-0.2));
+  el.btnPhotoZoomReset.addEventListener("click", resetPhotoView);
+
+  el.photoPreviewImg.addEventListener("wheel", (event) => {
+    if (!isDrawerOpen()) return;
+    event.preventDefault();
+    zoomPhoto(event.deltaY < 0 ? 0.15 : -0.15);
+  });
+
+  el.photoPreviewImg.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    if (state.detail.photoView.scale <= 1) return;
+    state.detail.photoView.dragging = true;
+    state.detail.photoView.dragStartX = event.clientX - state.detail.photoView.tx;
+    state.detail.photoView.dragStartY = event.clientY - state.detail.photoView.ty;
+    el.photoPreviewImg.classList.add("dragging");
+  });
+
+  window.addEventListener("mouseup", () => {
+    state.detail.photoView.dragging = false;
+    el.photoPreviewImg.classList.remove("dragging");
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!state.detail.photoView.dragging || state.detail.photoView.scale <= 1) return;
+    state.detail.photoView.tx = event.clientX - state.detail.photoView.dragStartX;
+    state.detail.photoView.ty = event.clientY - state.detail.photoView.dragStartY;
+    applyPhotoTransform();
+  });
 
   el.btnAlbumDetailSearch.addEventListener("click", searchAlbumDetailPhotos);
   el.albumDetailKeyword.addEventListener("keydown", (event) => {

@@ -194,9 +194,24 @@
             <div class="photo-detail-layout">
               <section class="photo-stage">
                 <header class="photo-stage-toolbar">
-                  <button class="btn ghost small" type="button" disabled>分享</button>
-                  <button class="btn ghost small" type="button" disabled>收藏</button>
-                  <button class="btn ghost small" type="button" disabled>删除</button>
+                  <button id="btnPhotoZoomOut" class="icon-btn" type="button" title="缩小">
+                    <img src="./icons/zoom-out.svg" alt="" />
+                  </button>
+                  <button id="btnPhotoZoomReset" class="icon-btn" type="button" title="重置缩放">
+                    <img src="./icons/zoom-reset.svg" alt="" />
+                  </button>
+                  <button id="btnPhotoZoomIn" class="icon-btn" type="button" title="放大">
+                    <img src="./icons/zoom-in.svg" alt="" />
+                  </button>
+                  <button class="icon-btn" type="button" title="分享" disabled>
+                    <img src="./icons/share.svg" alt="" />
+                  </button>
+                  <button class="icon-btn" type="button" title="收藏" disabled>
+                    <img src="./icons/star.svg" alt="" />
+                  </button>
+                  <button class="icon-btn" type="button" title="删除" disabled>
+                    <img src="./icons/trash.svg" alt="" />
+                  </button>
                 </header>
                 <img id="photoPreviewImg" alt="照片预览" />
               </section>
@@ -215,6 +230,11 @@
                   <h3>拍摄地点</h3>
                   <p id="photoGeoText" class="hint">-</p>
                   <a id="photoGeoLink" class="map-link hidden" href="#" target="_blank" rel="noreferrer">在地图打开</a>
+                </article>
+
+                <article class="meta-card">
+                  <h3>拍摄参数</h3>
+                  <div id="photoExifMeta" class="kv"></div>
                 </article>
               </section>
             </div>
