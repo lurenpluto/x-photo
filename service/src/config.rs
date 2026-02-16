@@ -47,6 +47,8 @@ pub struct ScanConfig {
     pub resume_enabled: bool,
     pub task_dispatch_interval_ms: u64,
     pub task_stale_seconds: i64,
+    pub source_change_detect_enabled: bool,
+    pub source_change_detect_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +92,8 @@ impl Default for AppConfig {
                 resume_enabled: true,
                 task_dispatch_interval_ms: 2000,
                 task_stale_seconds: 120,
+                source_change_detect_enabled: true,
+                source_change_detect_interval_ms: 30000,
             },
             album_rules: AlbumRulesConfig {
                 enabled: true,
@@ -153,6 +157,8 @@ impl Default for ScanConfig {
             resume_enabled: true,
             task_dispatch_interval_ms: 2000,
             task_stale_seconds: 120,
+            source_change_detect_enabled: true,
+            source_change_detect_interval_ms: 30000,
         }
     }
 }
@@ -228,6 +234,16 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(v) = std::env::var("SCAN_TASK_STALE_SECONDS") {
         if let Ok(n) = v.parse::<i64>() {
             config.scan.task_stale_seconds = n;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_SOURCE_CHANGE_DETECT_ENABLED") {
+        if let Ok(b) = v.parse::<bool>() {
+            config.scan.source_change_detect_enabled = b;
+        }
+    }
+    if let Ok(v) = std::env::var("SCAN_SOURCE_CHANGE_DETECT_INTERVAL_MS") {
+        if let Ok(n) = v.parse::<u64>() {
+            config.scan.source_change_detect_interval_ms = n;
         }
     }
 
@@ -350,6 +366,8 @@ checkpoint_every = 50
 resume_enabled = true
 task_dispatch_interval_ms = 2000
 task_stale_seconds = 120
+source_change_detect_enabled = true
+source_change_detect_interval_ms = 30000
 
 [album_rules]
 enabled = true

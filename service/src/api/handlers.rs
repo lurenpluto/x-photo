@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path as StdPath;
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 use axum::{extract::Path, extract::Query, extract::State, http::StatusCode, Json};
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -1585,6 +1586,8 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
 
 pub fn start_task_dispatcher(state: Arc<AppState>) {
     let interval_ms = state.config.scan.task_dispatch_interval_ms.max(200);
+    let change_detect_enabled = state.config.scan.source_change_detect_enabled;
+    let change_detect_interval_ms = state.config.scan.source_change_detect_interval_ms.max(2000);
     tokio::spawn(async move {
         if let Err(e) = ensure_daemon_task_row(state.clone(), "daemon:task_dispatcher", "task_dispatcher").await {
             error!(error = %e, "failed to ensure task dispatcher daemon row");
@@ -1593,6 +1596,9 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
         if let Err(e) = bootstrap_failed_sources_for_retry(state.clone()).await {
             error!(error = %e, "failed to bootstrap failed sources for retry");
         }
+
+        let mut source_fingerprints: HashMap<String, String> = HashMap::new();
+        let mut last_change_detect_at = Utc::now();
 
         loop {
             if let Err(e) = update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await {
@@ -1604,6 +1610,23 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
             if let Err(e) = reconcile_scan_task_statuses(state.clone()).await {
                 error!(error = %e, "scan task reconcile iteration failed");
             }
+
+            if change_detect_enabled {
+                let now = Utc::now();
+                let elapsed_ms = (now - last_change_detect_at).num_milliseconds();
+                if elapsed_ms >= change_detect_interval_ms as i64 {
+                    if let Err(e) = detect_source_changes_and_schedule_incremental_scans(
+                        state.clone(),
+                        &mut source_fingerprints,
+                    )
+                    .await
+                    {
+                        error!(error = %e, "source change detect iteration failed");
+                    }
+                    last_change_detect_at = now;
+                }
+            }
+
             sleep(Duration::from_millis(interval_ms)).await;
         }
     });
@@ -1680,6 +1703,122 @@ fn extract_source_id_from_payload(payload_json: Option<&str>) -> Option<String> 
     payload_json
         .and_then(|v| serde_json::from_str::<Value>(v).ok())
         .and_then(|v| v.get("source_id").and_then(|s| s.as_str()).map(|s| s.to_string()))
+}
+
+async fn detect_source_changes_and_schedule_incremental_scans(
+    state: Arc<AppState>,
+    source_fingerprints: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    let sources = sqlx::query_as::<_, Source>(
+        "SELECT id, name, root_path, source_type, enabled, created_at, updated_at
+         FROM sources
+         WHERE enabled = 1 AND source_type = 'local_fs'
+         ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("failed to load sources for change detect: {}", e))?;
+
+    let adapter = LocalFsAdapter::new(state.config.storage.allow_delete);
+    let mut live_source_ids = HashSet::new();
+
+    for source in sources {
+        live_source_ids.insert(source.id.clone());
+        let entries = match adapter.list_entries(&source.root_path) {
+            Ok(entries) => entries,
+            Err(e) => {
+                warn!(source_id = source.id, root_path = source.root_path, error = %e, "source change detect skipped due to list_entries error");
+                continue;
+            }
+        };
+
+        let fingerprint = build_source_fingerprint(&entries);
+        if let Some(prev) = source_fingerprints.get(&source.id) {
+            if prev != &fingerprint {
+                schedule_incremental_fs_watch_scan(state.clone(), &source, prev, &fingerprint).await?;
+            }
+        } else {
+            info!(source_id = source.id, root_path = source.root_path, "source change detect baseline initialized");
+        }
+
+        source_fingerprints.insert(source.id.clone(), fingerprint);
+    }
+
+    source_fingerprints.retain(|source_id, _| live_source_ids.contains(source_id));
+    Ok(())
+}
+
+fn build_source_fingerprint(entries: &[crate::infra::storage::StorageEntry]) -> String {
+    let mut file_count: u64 = 0;
+    let mut total_size: u64 = 0;
+    let mut max_modified_millis: i128 = 0;
+
+    for entry in entries {
+        if entry.is_dir {
+            continue;
+        }
+        file_count += 1;
+        total_size = total_size.saturating_add(entry.size);
+        if let Some(modified) = entry.modified_at {
+            if let Ok(since_epoch) = modified.duration_since(UNIX_EPOCH) {
+                let millis = since_epoch.as_millis() as i128;
+                if millis > max_modified_millis {
+                    max_modified_millis = millis;
+                }
+            }
+        }
+    }
+
+    format!(
+        "files:{}|size:{}|modified_ms:{}",
+        file_count, total_size, max_modified_millis
+    )
+}
+
+async fn schedule_incremental_fs_watch_scan(
+    state: Arc<AppState>,
+    source: &Source,
+    previous_fingerprint: &str,
+    current_fingerprint: &str,
+) -> Result<(), String> {
+    let active_scan_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1)
+         FROM scan_jobs
+         WHERE source_id = ? AND status IN ('pending', 'running')",
+    )
+    .bind(&source.id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("failed to check active scans for source {}: {}", source.id, e))?;
+
+    if active_scan_count > 0 {
+        info!(
+            source_id = source.id,
+            active_scan_count,
+            "source change detected but scan already active; skip incremental scheduling"
+        );
+        return Ok(());
+    }
+
+    let payload = json!({
+        "source_id": source.id,
+        "changed_paths": [source.root_path.clone()],
+        "change_detect": {
+            "previous_fingerprint": previous_fingerprint,
+            "current_fingerprint": current_fingerprint,
+        },
+    });
+
+    let task_job_id = create_scan_task_job(state.clone(), &source.id, TRIGGER_FS_WATCH, payload).await?;
+    let job_id = execute_scan_task_job(state.clone(), &task_job_id).await?;
+    info!(
+        source_id = source.id,
+        task_job_id,
+        job_id,
+        root_path = source.root_path,
+        "source change detected; incremental fs_watch scan scheduled"
+    );
+    Ok(())
 }
 
 async fn ensure_daemon_task_row(

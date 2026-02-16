@@ -25,6 +25,8 @@ fn collect_boot_env_snapshot() -> Vec<(String, String)> {
         "SCAN_RESUME_ENABLED",
         "SCAN_TASK_DISPATCH_INTERVAL_MS",
         "SCAN_TASK_STALE_SECONDS",
+        "SCAN_SOURCE_CHANGE_DETECT_ENABLED",
+        "SCAN_SOURCE_CHANGE_DETECT_INTERVAL_MS",
     ]
     .into_iter()
     .map(|k| (k.to_string(), env_or_unset(k)))
@@ -98,6 +100,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         scan_resume_enabled = cfg.scan.resume_enabled,
         scan_task_dispatch_interval_ms = cfg.scan.task_dispatch_interval_ms,
         scan_task_stale_seconds = cfg.scan.task_stale_seconds,
+        scan_source_change_detect_enabled = cfg.scan.source_change_detect_enabled,
+        scan_source_change_detect_interval_ms = cfg.scan.source_change_detect_interval_ms,
         album_rules_enabled = cfg.album_rules.enabled,
         album_rule_regex_count = cfg.album_rules.regex_patterns.len(),
         date_delimiters = ?cfg.album_rules.date_delimiters,
