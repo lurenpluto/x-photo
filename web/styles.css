@@ -543,6 +543,10 @@ textarea {
   margin-top: 0.5rem;
 }
 
+#favoritePageSize {
+  width: 88px;
+}
+
 .settings-grid {
   display: grid;
   gap: 0.55rem;

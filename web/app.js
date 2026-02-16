@@ -51,6 +51,7 @@ const state = {
   favorite: {
     page: 1,
     total: 0,
+    pageSize: Math.min(100, Math.max(1, Number(localStorage.getItem("xphoto_favorite_page_size") || "36") || 36)),
   },
   timers: {
     taskAutoRefresh: null,
@@ -91,6 +92,7 @@ const el = {
   btnReloadAlbums: $("btnReloadAlbums"),
   albumGrid: $("albumGrid"),
   btnReloadFavorites: $("btnReloadFavorites"),
+  favoritePageSize: $("favoritePageSize"),
   favoriteMasonry: $("favoriteMasonry"),
   btnFavoritePrev: $("btnFavoritePrev"),
   btnFavoriteNext: $("btnFavoriteNext"),
@@ -271,6 +273,16 @@ function insertSearchPrefix(prefix) {
 function setApiBase(value) {
   state.apiBase = value.replace(/\/$/, "");
   localStorage.setItem("xphoto_api_base", state.apiBase);
+}
+
+function getFavoritePageSize() {
+  const size = Math.min(100, Math.max(1, Number(el.favoritePageSize.value) || state.favorite.pageSize || 36));
+  state.favorite.pageSize = size;
+  localStorage.setItem("xphoto_favorite_page_size", String(size));
+  if (el.favoritePageSize.value !== String(size)) {
+    el.favoritePageSize.value = String(size);
+  }
+  return size;
 }
 
 function setSidebarCollapsed(collapsed) {
@@ -889,9 +901,10 @@ function renderPhotos(data) {
 
 function renderFavoritePhotos(data) {
   const items = data.items || [];
+  state.photoItems = items.map((p) => p.id);
   state.favorite.total = data.total ?? 0;
   state.favorite.page = data.page ?? 1;
-  const pageSize = Number(el.photoPageSize.value) || 36;
+  const pageSize = getFavoritePageSize();
   const totalPages = Math.max(1, Math.ceil(state.favorite.total / pageSize));
   el.favoritePageHint.textContent = `第 ${state.favorite.page} / ${totalPages} 页 · 共 ${state.favorite.total} 张`;
   el.btnFavoritePrev.disabled = state.favorite.page <= 1;
@@ -948,7 +961,7 @@ function renderFavoritePhotos(data) {
 async function loadFavoritePhotos() {
   el.favoriteMasonry.innerHTML = '<div class="loading">加载收藏照片中...</div>';
   try {
-    const pageSize = Number(el.photoPageSize.value) || 36;
+    const pageSize = getFavoritePageSize();
     const data = await api(`/photos/favorites?page=${state.favorite.page}&page_size=${pageSize}`, {
       method: "GET",
     });
@@ -959,7 +972,7 @@ async function loadFavoritePhotos() {
 }
 
 async function loadFavoritePage(page) {
-  const pageSize = Number(el.photoPageSize.value) || 36;
+  const pageSize = getFavoritePageSize();
   const totalPages = Math.max(1, Math.ceil(state.favorite.total / pageSize));
   state.favorite.page = Math.max(1, Math.min(totalPages, page));
   await loadFavoritePhotos();
@@ -973,10 +986,11 @@ function setPhotoFavoriteUi(isFavorite) {
 
 async function toggleSelectedPhotoFavorite() {
   if (!state.selectedPhotoId) return;
+  const currentPhotoId = state.selectedPhotoId;
   const next = !el.btnPhotoFavorite.classList.contains("active");
   el.btnPhotoFavorite.disabled = true;
   try {
-    await api(`/photos/${state.selectedPhotoId}/favorite`, {
+    await api(`/photos/${currentPhotoId}/favorite`, {
       method: "PATCH",
       body: JSON.stringify({ favorite: next }),
     });
@@ -984,6 +998,13 @@ async function toggleSelectedPhotoFavorite() {
     showToast(next ? "已收藏" : "已取消收藏");
     if (state.tab === "favorites") {
       await loadFavoritePhotos();
+      if (!next && state.detail.active && state.detail.type === "photo" && !state.photoItems.includes(currentPhotoId)) {
+        if (state.photoItems.length > 0) {
+          await openPhotoDetailPage(state.photoItems[0], { pushHistory: false });
+        } else {
+          goDetailUp();
+        }
+      }
     }
   } catch (err) {
     showToast(`收藏操作失败: ${err.message}`, "error");
@@ -1719,6 +1740,7 @@ function bindEvents() {
   el.apiBase.value = state.apiBase;
   el.apiBase.addEventListener("change", () => setApiBase(el.apiBase.value.trim()));
   el.btnHealth.addEventListener("click", checkHealth);
+  el.favoritePageSize.value = String(state.favorite.pageSize);
 
   window.addEventListener("hashchange", () => {
     const hashTab = location.hash.replace("#", "") || "photos";
@@ -1756,16 +1778,16 @@ function bindEvents() {
   el.photoEndDate.addEventListener("change", searchPhotos);
   el.photoPageSize.addEventListener("change", () => {
     searchPhotos();
-    if (state.tab === "favorites") {
-      state.favorite.page = 1;
-      void loadFavoritePhotos();
-    }
   });
   el.btnPhotoPrev.addEventListener("click", () => loadPhotoPage(state.photoPage - 1));
   el.btnPhotoNext.addEventListener("click", () => loadPhotoPage(state.photoPage + 1));
 
   el.btnReloadAlbumsPhotos.addEventListener("click", loadAlbums);
   el.btnReloadAlbums.addEventListener("click", loadAlbums);
+  el.favoritePageSize.addEventListener("change", () => {
+    state.favorite.page = 1;
+    void loadFavoritePhotos();
+  });
   el.btnReloadFavorites.addEventListener("click", loadFavoritePhotos);
   el.btnFavoritePrev.addEventListener("click", () => loadFavoritePage(state.favorite.page - 1));
   el.btnFavoriteNext.addEventListener("click", () => loadFavoritePage(state.favorite.page + 1));

@@ -119,7 +119,15 @@
           <article class="panel">
             <div class="panel-title">
               <h2>收藏照片</h2>
-              <button id="btnReloadFavorites" class="btn ghost">刷新</button>
+              <div class="title-actions">
+                <label for="favoritePageSize" class="hint">每页</label>
+                <select id="favoritePageSize">
+                  <option value="24">24</option>
+                  <option value="36" selected>36</option>
+                  <option value="60">60</option>
+                </select>
+                <button id="btnReloadFavorites" class="btn ghost">刷新</button>
+              </div>
             </div>
             <div id="favoriteMasonry" class="masonry"></div>
             <div class="pager">
