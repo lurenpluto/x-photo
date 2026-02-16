@@ -700,18 +700,13 @@ textarea {
   object-fit: contain;
   border-radius: 10px;
   display: block;
-  transition: transform 120ms ease;
-  cursor: grab;
-  opacity: 0;
   transition: transform 120ms ease, opacity 180ms ease;
+  cursor: grab;
+  opacity: 1;
 }
 
 .photo-stage img.dragging {
   cursor: grabbing;
-}
-
-.photo-stage img.loaded {
-  opacity: 1;
 }
 
 .zoom-badge {

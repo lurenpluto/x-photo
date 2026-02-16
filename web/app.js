@@ -204,6 +204,12 @@ function formatPhotoGroupLabel(dateText) {
   return dateText;
 }
 
+function formatShotTime(isoText) {
+  if (!isoText) return "未知";
+  const t = String(isoText).replace("T", " ");
+  return t.length > 19 ? t.slice(0, 19) : t;
+}
+
 function setApiBase(value) {
   state.apiBase = value.replace(/\/$/, "");
   localStorage.setItem("xphoto_api_base", state.apiBase);
@@ -737,8 +743,7 @@ function renderPhotos(data) {
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
-          <p class="item-sub">${escapeHtml(p.file_path)}</p>
-          <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
+          <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
         </article>
       `;
         })
@@ -1112,7 +1117,6 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     const p = data.photo;
     el.detailTitle.textContent = `照片详情 · ${p.file_name || "未命名"}`;
     const v = Date.now();
-    el.photoPreviewImg.classList.remove("loaded");
     el.photoPreviewImg.src = `${state.apiBase}/photos/${photoId}/file?v=${v}`;
     el.photoPreviewImg.alt = p.file_name || "照片预览";
     resetPhotoView();
@@ -1132,12 +1136,12 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     state.selectedPhotoAlbums = data.albums || [];
     const albumText = state.selectedPhotoAlbums.map((a) => a.name).join(" / ") || "-";
     el.photoDetail.innerHTML = [
-      ["id", p.id],
-      ["file_name", p.file_name],
-      ["file_path", p.file_path],
-      ["source_id", p.source_id],
-      ["sort_time", p.sort_time],
-      ["albums", albumText],
+      ["照片ID", p.id],
+      ["文件名", p.file_name],
+      ["文件路径", p.file_path],
+      ["来源ID", p.source_id],
+      ["拍摄时间", formatShotTime(p.sort_time)],
+      ["所属相册", albumText],
     ]
       .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v || "-")}</p>`)
       .join("");
@@ -1195,8 +1199,7 @@ function renderAlbumDetailPhotos(items) {
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
-          <p class="item-sub">${escapeHtml(p.file_path)}</p>
-          <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
+          <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
           <span class="preview-entry">预览</span>
         </article>
       `;
@@ -1245,11 +1248,11 @@ async function loadAlbumDetailMeta(albumId) {
 
   el.detailTitle.textContent = `相册详情 · ${state.albumDetail.albumName}`;
   el.albumDetailMeta.innerHTML = [
-    ["id", album.id],
-    ["name", album.name],
-    ["auto_created", album.auto_created ? "yes" : "no"],
-    ["created_at", album.created_at || "-"],
-    ["updated_at", album.updated_at || "-"],
+    ["相册ID", album.id],
+    ["相册名", album.name],
+    ["创建方式", album.auto_created ? "自动" : "手动"],
+    ["创建时间", album.created_at || "-"],
+    ["更新时间", album.updated_at || "-"],
   ]
     .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`)
     .join("");
@@ -1529,8 +1532,10 @@ function bindEvents() {
   el.photoPreviewImg.addEventListener("mousedown", startPhotoDrag);
   el.photoPreviewImg.addEventListener("dblclick", onPhotoDoubleClick);
   el.photoPreviewImg.addEventListener("load", () => {
-    el.photoPreviewImg.classList.add("loaded");
     applyPhotoTransform();
+  });
+  el.photoPreviewImg.addEventListener("error", () => {
+    showToast("照片加载失败，请检查文件路径与权限", "error");
   });
   window.addEventListener("mouseup", endPhotoDrag);
   window.addEventListener("mousemove", movePhotoDrag);
