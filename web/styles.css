@@ -329,6 +329,7 @@ textarea {
   background: rgba(255, 255, 255, 0.67);
   min-height: 132px;
   overflow: hidden;
+  cursor: pointer;
 }
 
 .album-card p {
@@ -586,43 +587,28 @@ textarea {
   flex-wrap: wrap;
 }
 
-.drawer {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 180ms ease;
+.main.detail-open .topbar,
+.main.detail-open .tab-panel {
+  display: none;
 }
 
-.drawer.open {
-  pointer-events: auto;
-  opacity: 1;
+.detail-view {
+  display: none;
+  padding: 0.9rem;
 }
 
-.drawer-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(9, 17, 28, 0.38);
-}
-
-.drawer-panel {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: min(560px, 100%);
-  background: #f4f7f9;
-  border-left: 1px solid rgba(33, 48, 65, 0.16);
-  padding: 1rem;
+.detail-view.open {
   display: grid;
   gap: 0.8rem;
-  overflow: auto;
-  transform: translateX(20px);
-  transition: transform 180ms ease;
 }
 
-.drawer.open .drawer-panel {
-  transform: translateX(0);
+.detail-page {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.hidden {
+  display: none !important;
 }
 
 @media (max-width: 1200px) {

@@ -20,6 +20,13 @@ const state = {
   taskStatusFilter: "",
   taskJobTypeFilter: "",
   taskTriggerTypeFilter: "",
+  detail: {
+    active: false,
+    type: null,
+    tabBeforeOpen: "photos",
+    current: null,
+    stack: [],
+  },
   timers: {
     taskAutoRefresh: null,
     taskTickBusy: false,
@@ -29,6 +36,7 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 const el = {
+  main: document.querySelector(".main"),
   sideNav: $("sideNav"),
   tabPhotos: $("tab-photos"),
   tabAlbums: $("tab-albums"),
@@ -81,9 +89,15 @@ const el = {
   btnCancelScan: $("btnCancelScan"),
   btnRetryScan: $("btnRetryScan"),
 
-  photoDrawer: $("photoDrawer"),
-  photoDrawerBackdrop: $("photoDrawerBackdrop"),
-  btnCloseDrawer: $("btnCloseDrawer"),
+  detailView: $("detailView"),
+  btnDetailBack: $("btnDetailBack"),
+  detailTitle: $("detailTitle"),
+  photoDetailNav: $("photoDetailNav"),
+  photoDetailPage: $("photoDetailPage"),
+  albumDetailPage: $("albumDetailPage"),
+  albumDetailMeta: $("albumDetailMeta"),
+  albumDetailPhotos: $("albumDetailPhotos"),
+
   btnDrawerPrev: $("btnDrawerPrev"),
   btnDrawerNext: $("btnDrawerNext"),
   photoDetail: $("photoDetail"),
@@ -212,9 +226,55 @@ function updateTabUi() {
   });
 }
 
+function openDetailView(type, title, payload, options = { pushHistory: true }) {
+  if (!state.detail.active) {
+    state.detail.tabBeforeOpen = state.tab;
+  } else if (options.pushHistory && state.detail.current) {
+    state.detail.stack.push(state.detail.current);
+  }
+  state.detail.active = true;
+  state.detail.type = type;
+  state.detail.current = { type, title, payload };
+
+  el.main.classList.add("detail-open");
+  el.detailView.classList.add("open");
+  el.detailView.setAttribute("aria-hidden", "false");
+  el.detailTitle.textContent = title;
+
+  el.photoDetailPage.classList.toggle("hidden", type !== "photo");
+  el.albumDetailPage.classList.toggle("hidden", type !== "album");
+  el.photoDetailNav.classList.toggle("hidden", type !== "photo");
+}
+
+function closeDetailView() {
+  if (state.detail.stack.length > 0) {
+    const prev = state.detail.stack.pop();
+    if (prev?.type === "album" && prev.payload?.albumId) {
+      openAlbumDetailPage(prev.payload.albumId, { pushHistory: false });
+      return;
+    }
+    if (prev?.type === "photo" && prev.payload?.photoId) {
+      openPhotoDetailPage(prev.payload.photoId, { pushHistory: false });
+      return;
+    }
+  }
+
+  state.detail.active = false;
+  state.detail.type = null;
+  state.detail.current = null;
+  state.detail.stack = [];
+  el.main.classList.remove("detail-open");
+  el.detailView.classList.remove("open");
+  el.detailView.setAttribute("aria-hidden", "true");
+}
+
 function setTab(tab) {
   const valid = ["photos", "albums", "settings", "status"];
   state.tab = valid.includes(tab) ? tab : "photos";
+  if (state.detail.active) {
+    state.detail.stack = [];
+    closeDetailView();
+  }
   location.hash = state.tab;
   updateTabUi();
 }
@@ -286,7 +346,7 @@ function renderAlbumCards(target, albums) {
         const title = a.name || "未命名相册";
         const timeLabel = (a.created_at || "").slice(0, 10) || "-";
         return `
-      <article class="album-card">
+      <article class="album-card" data-album-id="${a.id}">
         <div class="album-cover" style="background:${visual.background};">
           <p class="item-title">${escapeHtml(title)}</p>
         </div>
@@ -296,6 +356,15 @@ function renderAlbumCards(target, albums) {
       },
     )
     .join("");
+
+  target.querySelectorAll(".album-card[data-album-id]").forEach((item) => {
+    item.addEventListener("click", () => {
+      const albumId = item.getAttribute("data-album-id");
+      if (albumId) {
+        openAlbumDetailPage(albumId);
+      }
+    });
+  });
 }
 
 async function loadAlbums() {
@@ -461,7 +530,7 @@ function renderPhotos(data) {
   el.photoMasonry.querySelectorAll("[data-photo-id]").forEach((card) => {
     card.addEventListener("click", () => {
       const photoId = card.getAttribute("data-photo-id");
-      if (photoId) openPhotoDrawer(photoId);
+      if (photoId) openPhotoDetailPage(photoId);
     });
   });
 }
@@ -769,18 +838,8 @@ async function retryScan() {
   }
 }
 
-function openDrawer() {
-  el.photoDrawer.classList.add("open");
-  el.photoDrawer.setAttribute("aria-hidden", "false");
-}
-
-function closeDrawer() {
-  el.photoDrawer.classList.remove("open");
-  el.photoDrawer.setAttribute("aria-hidden", "true");
-}
-
 function isDrawerOpen() {
-  return el.photoDrawer.classList.contains("open");
+  return state.detail.active && state.detail.type === "photo";
 }
 
 function updateDrawerNavButtons() {
@@ -796,7 +855,7 @@ function moveDrawerPhoto(step) {
   if (target < 0 || target >= state.photoItems.length) return;
   const nextPhotoId = state.photoItems[target];
   if (nextPhotoId) {
-    openPhotoDrawer(nextPhotoId);
+    openPhotoDetailPage(nextPhotoId);
   }
 }
 
@@ -809,16 +868,16 @@ async function removePhotoFromAlbum(albumId) {
       body: JSON.stringify({ photo_ids: [state.selectedPhotoId] }),
     });
     el.photoDetailMsg.textContent = "已从相册移除";
-    await openPhotoDrawer(state.selectedPhotoId);
+    await openPhotoDetailPage(state.selectedPhotoId);
   } catch (err) {
     el.photoDetailMsg.textContent = `移除失败: ${err.message}`;
   }
 }
 
-async function openPhotoDrawer(photoId) {
+async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
   state.selectedPhotoId = photoId;
   el.photoDetailMsg.textContent = "加载详情...";
-  openDrawer();
+  openDetailView("photo", "照片详情", { photoId }, options);
   updateDrawerNavButtons();
   try {
     const data = await api(`/photos/${photoId}`, { method: "GET" });
@@ -861,6 +920,67 @@ async function openPhotoDrawer(photoId) {
   }
 }
 
+function renderAlbumDetailPhotos(items) {
+  if (!items.length) {
+    el.albumDetailPhotos.innerHTML = '<p class="hint">该相册暂无照片。</p>';
+    return;
+  }
+
+  const cards = items
+    .map((p) => {
+      const visual = photoVisualStyle(p);
+      return `
+      <article class="photo-card" data-album-photo-id="${p.id}">
+        <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+          <div class="photo-title">${escapeHtml(p.file_name)}</div>
+        </div>
+        <p class="item-sub">${escapeHtml(p.file_path)}</p>
+        <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
+      </article>
+    `;
+    })
+    .join("");
+
+  el.albumDetailPhotos.innerHTML = `<div class="masonry-grid">${cards}</div>`;
+  el.albumDetailPhotos.querySelectorAll("[data-album-photo-id]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const photoId = node.getAttribute("data-album-photo-id");
+      if (photoId) {
+        openPhotoDetailPage(photoId);
+      }
+    });
+  });
+}
+
+async function openAlbumDetailPage(albumId, options = { pushHistory: true }) {
+  openDetailView("album", "相册详情", { albumId }, options);
+  el.albumDetailMeta.innerHTML = "<p>状态</p><p>加载中...</p>";
+  el.albumDetailPhotos.innerHTML = '<div class="loading">加载相册照片中...</div>';
+  try {
+    const data = await api(`/albums/${albumId}?page=1&page_size=200`, { method: "GET" });
+    const album = data.album;
+    const photos = data.photos?.items || [];
+
+    el.detailTitle.textContent = `相册详情 · ${album.name}`;
+    el.albumDetailMeta.innerHTML = [
+      ["id", album.id],
+      ["name", album.name],
+      ["auto_created", album.auto_created ? "yes" : "no"],
+      ["photo_count", String(data.photos?.total ?? photos.length)],
+      ["created_at", album.created_at || "-"],
+      ["updated_at", album.updated_at || "-"],
+    ]
+      .map(([k, v]) => `<p>${escapeHtml(k)}</p><p>${escapeHtml(v)}</p>`)
+      .join("");
+
+    state.photoItems = photos.map((p) => p.id);
+    renderAlbumDetailPhotos(photos);
+  } catch (err) {
+    el.albumDetailMeta.innerHTML = `<p>错误</p><p>${escapeHtml(err.message)}</p>`;
+    el.albumDetailPhotos.innerHTML = "";
+  }
+}
+
 async function saveRemark() {
   if (!state.selectedPhotoId) return;
   el.photoDetailMsg.textContent = "保存中...";
@@ -890,7 +1010,7 @@ async function addPhotoToAlbum() {
       body: JSON.stringify({ album_id: albumId, photo_ids: [state.selectedPhotoId] }),
     });
     el.photoDetailMsg.textContent = "已加入相册";
-    await openPhotoDrawer(state.selectedPhotoId);
+    await openPhotoDetailPage(state.selectedPhotoId);
   } catch (err) {
     el.photoDetailMsg.textContent = `加入失败: ${err.message}`;
   }
@@ -920,8 +1040,8 @@ function isTypingTarget(target) {
 }
 
 function onKeydown(event) {
-  if (event.key === "Escape" && isDrawerOpen()) {
-    closeDrawer();
+  if (event.key === "Escape" && state.detail.active) {
+    closeDetailView();
     return;
   }
 
@@ -1008,10 +1128,9 @@ function bindEvents() {
   el.btnCancelScan.addEventListener("click", cancelScan);
   el.btnRetryScan.addEventListener("click", retryScan);
 
-  el.btnCloseDrawer.addEventListener("click", closeDrawer);
+  el.btnDetailBack.addEventListener("click", closeDetailView);
   el.btnDrawerPrev.addEventListener("click", () => moveDrawerPhoto(-1));
   el.btnDrawerNext.addEventListener("click", () => moveDrawerPhoto(1));
-  el.photoDrawerBackdrop.addEventListener("click", closeDrawer);
   el.btnSaveRemark.addEventListener("click", saveRemark);
   el.btnAddToAlbum.addEventListener("click", addPhotoToAlbum);
 

@@ -177,38 +177,46 @@
             </div>
           </article>
         </section>
+
+        <section id="detailView" class="detail-view panel" aria-hidden="true">
+          <div class="panel-title">
+            <div class="title-actions">
+              <button id="btnDetailBack" class="btn ghost small" type="button">返回</button>
+              <h2 id="detailTitle">详情</h2>
+            </div>
+            <div id="photoDetailNav" class="title-actions hidden">
+              <button id="btnDrawerPrev" class="btn ghost small" type="button">上一张</button>
+              <button id="btnDrawerNext" class="btn ghost small" type="button">下一张</button>
+            </div>
+          </div>
+
+          <div id="photoDetailPage" class="detail-page hidden">
+            <div id="photoDetail" class="kv"></div>
+            <div>
+              <h3>所在相册</h3>
+              <div id="photoAlbums" class="chips"></div>
+            </div>
+            <div class="settings-grid">
+              <label for="photoRemark">备注</label>
+              <textarea id="photoRemark" rows="3" placeholder="输入备注"></textarea>
+              <button id="btnSaveRemark" class="btn">保存备注</button>
+            </div>
+            <div class="settings-grid">
+              <label for="photoAlbumSelect">加入相册</label>
+              <select id="photoAlbumSelect"></select>
+              <button id="btnAddToAlbum" class="btn">加入相册</button>
+            </div>
+            <p id="photoDetailMsg" class="hint"></p>
+          </div>
+
+          <div id="albumDetailPage" class="detail-page hidden">
+            <div id="albumDetailMeta" class="kv"></div>
+            <h3>相册照片</h3>
+            <div id="albumDetailPhotos" class="masonry"></div>
+          </div>
+        </section>
       </main>
     </div>
-
-    <aside id="photoDrawer" class="drawer" aria-hidden="true">
-      <div class="drawer-backdrop" id="photoDrawerBackdrop"></div>
-      <section class="drawer-panel">
-        <div class="panel-title">
-          <h2>照片详情</h2>
-          <div class="title-actions">
-            <button id="btnDrawerPrev" class="btn ghost small" type="button">上一张</button>
-            <button id="btnDrawerNext" class="btn ghost small" type="button">下一张</button>
-            <button id="btnCloseDrawer" class="btn ghost small" type="button">关闭</button>
-          </div>
-        </div>
-        <div id="photoDetail" class="kv"></div>
-        <div>
-          <h3>所在相册</h3>
-          <div id="photoAlbums" class="chips"></div>
-        </div>
-        <div class="settings-grid">
-          <label for="photoRemark">备注</label>
-          <textarea id="photoRemark" rows="3" placeholder="输入备注"></textarea>
-          <button id="btnSaveRemark" class="btn">保存备注</button>
-        </div>
-        <div class="settings-grid">
-          <label for="photoAlbumSelect">加入相册</label>
-          <select id="photoAlbumSelect"></select>
-          <button id="btnAddToAlbum" class="btn">加入相册</button>
-        </div>
-        <p id="photoDetailMsg" class="hint"></p>
-      </section>
-    </aside>
 
     <template id="sourceItemTpl">
       <div class="list-item">
