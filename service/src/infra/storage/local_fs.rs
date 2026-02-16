@@ -16,10 +16,24 @@ impl LocalFsAdapter {
     }
 
     fn normalize_path(&self, path: &str) -> Result<PathBuf, StorageError> {
-        if path.trim().is_empty() {
+        let raw = path.trim();
+        if raw.is_empty() {
             return Err(StorageError::InvalidPath(path.to_string()));
         }
-        Ok(PathBuf::from(path))
+
+        if raw == "~" {
+            if let Ok(home) = std::env::var("HOME") {
+                return Ok(PathBuf::from(home));
+            }
+        }
+
+        if let Some(stripped) = raw.strip_prefix("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                return Ok(PathBuf::from(home).join(stripped));
+            }
+        }
+
+        Ok(PathBuf::from(raw))
     }
 
     fn to_entry(path: PathBuf, metadata: fs::Metadata) -> StorageEntry {
@@ -47,6 +61,24 @@ impl LocalFsAdapter {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_path_should_expand_tilde_prefix() {
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
+        let adapter = LocalFsAdapter::new(false);
+        let path = adapter
+            .normalize_path("~/.xphoto/tests")
+            .expect("normalize path should succeed");
+        assert!(path.starts_with(home));
+        assert!(path.to_string_lossy().contains(".xphoto/tests"));
     }
 }
 
