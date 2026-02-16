@@ -3,7 +3,15 @@ use std::path::Path as StdPath;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
-use axum::{extract::Path, extract::Query, extract::State, http::StatusCode, Json};
+use axum::{
+    body::Body,
+    extract::Path,
+    extract::Query,
+    extract::State,
+    http::{header, HeaderValue, StatusCode},
+    response::Response,
+    Json,
+};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -1117,6 +1125,68 @@ pub async fn get_photo_detail(
         .collect::<Vec<_>>();
 
     Ok(Json(ApiResponse::ok(PhotoDetailData { photo, albums })))
+}
+
+pub async fn get_photo_file(
+    Path(photo_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Response<Body>, (StatusCode, Json<ApiResponse<Value>>)> {
+    info!(photo_id, "get_photo_file requested");
+
+    let row = sqlx::query(
+        "SELECT file_path, mime_type
+         FROM photos
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&photo_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("get_photo_file.photo", json!({"photo_id": photo_id}), err))?
+    .ok_or_else(|| bad_request("photo 不存在"))?;
+
+    let file_path: String = row.get("file_path");
+    let mime_type: Option<String> = row.get("mime_type");
+
+    let bytes = tokio::fs::read(&file_path).await.map_err(|e| {
+        error!(photo_id, file_path, error = %e, "failed to read photo file");
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                code: 404,
+                message: format!("photo file not found: {}", e),
+                data: json!({}),
+            }),
+        )
+    })?;
+
+    let content_type = mime_type
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| guess_mime_by_file_path(&file_path));
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=60"));
+    if let Ok(v) = HeaderValue::from_str(&content_type) {
+        response.headers_mut().insert(header::CONTENT_TYPE, v);
+    }
+
+    Ok(response)
+}
+
+fn guess_mime_by_file_path(path: &str) -> String {
+    let ext = StdPath::new(path)
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png".to_string(),
+        "webp" => "image/webp".to_string(),
+        "gif" => "image/gif".to_string(),
+        _ => "image/jpeg".to_string(),
+    }
 }
 
 pub async fn get_album_detail(

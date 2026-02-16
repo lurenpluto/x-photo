@@ -191,10 +191,17 @@
           </div>
 
           <div id="photoDetailPage" class="detail-page hidden">
-            <div id="photoDetail" class="kv"></div>
-            <div>
-              <h3>所在相册</h3>
-              <div id="photoAlbums" class="chips"></div>
+            <div class="photo-detail-layout">
+              <section class="photo-stage">
+                <img id="photoPreviewImg" alt="照片预览" />
+              </section>
+              <section class="photo-side">
+                <div id="photoDetail" class="kv"></div>
+                <div>
+                  <h3>所在相册</h3>
+                  <div id="photoAlbums" class="chips"></div>
+                </div>
+              </section>
             </div>
             <div class="settings-grid">
               <label for="photoRemark">备注</label>

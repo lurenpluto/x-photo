@@ -607,6 +607,40 @@ textarea {
   gap: 0.7rem;
 }
 
+.photo-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 0.8rem;
+}
+
+.photo-stage {
+  border-radius: 14px;
+  background: #0d1118;
+  border: 1px solid rgba(33, 48, 65, 0.22);
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+  padding: 0.8rem;
+}
+
+.photo-stage img {
+  max-width: 100%;
+  max-height: min(72vh, 760px);
+  object-fit: contain;
+  border-radius: 10px;
+  display: block;
+}
+
+.photo-side {
+  border: 1px solid rgba(33, 48, 65, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 0.75rem;
+  display: grid;
+  align-content: start;
+  gap: 0.6rem;
+}
+
 .hidden {
   display: none !important;
 }
@@ -638,6 +672,10 @@ textarea {
   .grid-2,
   .task-detail-grid,
   .inline-form.task-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .photo-detail-layout {
     grid-template-columns: 1fr;
   }
 

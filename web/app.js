@@ -106,6 +106,7 @@ const el = {
   detailTitle: $("detailTitle"),
   photoDetailNav: $("photoDetailNav"),
   photoDetailPage: $("photoDetailPage"),
+  photoPreviewImg: $("photoPreviewImg"),
   albumDetailPage: $("albumDetailPage"),
   albumDetailMeta: $("albumDetailMeta"),
   albumDetailPhotos: $("albumDetailPhotos"),
@@ -903,6 +904,10 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
   try {
     const data = await api(`/photos/${photoId}`, { method: "GET" });
     const p = data.photo;
+    el.detailTitle.textContent = `照片详情 · ${p.file_name || "未命名"}`;
+    const v = Date.now();
+    el.photoPreviewImg.src = `${state.apiBase}/photos/${photoId}/file?v=${v}`;
+    el.photoPreviewImg.alt = p.file_name || "照片预览";
     state.selectedPhotoAlbums = data.albums || [];
     const albumText = state.selectedPhotoAlbums.map((a) => a.name).join(" / ") || "-";
     el.photoDetail.innerHTML = [

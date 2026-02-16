@@ -57,6 +57,7 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .route("/rpc/v1/task-jobs/{job_id}/retry", post(handlers::retry_task_job))
         .route("/rpc/v1/photos/search", post(handlers::search_photos))
         .route("/rpc/v1/photos/{photo_id}", get(handlers::get_photo_detail))
+        .route("/rpc/v1/photos/{photo_id}/file", get(handlers::get_photo_file))
         .route("/rpc/v1/photos/{photo_id}/remark", patch(handlers::update_photo_remark))
         .route("/rpc/v1/photos/batch/delete", post(handlers::batch_delete_photos))
         .route("/rpc/v1/photos/batch/add-to-album", post(handlers::batch_add_to_album))
