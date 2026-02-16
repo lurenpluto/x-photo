@@ -265,6 +265,10 @@ function setApiBase(value) {
 function setSidebarCollapsed(collapsed) {
   el.layout.classList.toggle("sidebar-collapsed", collapsed);
   localStorage.setItem("xphoto_sidebar_collapsed", collapsed ? "1" : "0");
+  if (el.btnSidebarToggle) {
+    el.btnSidebarToggle.textContent = collapsed ? "展开" : "折叠侧栏";
+    el.btnSidebarToggle.title = collapsed ? "展开侧栏" : "折叠侧栏";
+  }
 }
 
 function toggleSidebarCollapsed() {

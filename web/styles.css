@@ -958,14 +958,19 @@ kbd {
 .layout.sidebar-collapsed .brand h1,
 .layout.sidebar-collapsed .side-group,
 .layout.sidebar-collapsed .sidebar > .hint,
-.layout.sidebar-collapsed .nav-btn span:last-child,
-.layout.sidebar-collapsed #btnSidebarToggle {
+.layout.sidebar-collapsed .nav-btn span:last-child {
   display: none;
 }
 
 .layout.sidebar-collapsed .nav-btn {
   justify-content: center;
   padding: 0.58rem;
+}
+
+.layout.sidebar-collapsed .brand .btn {
+  width: 100%;
+  padding: 0.42rem 0.45rem;
+  font-size: 0.74rem;
 }
 
 @media (max-width: 640px) {
