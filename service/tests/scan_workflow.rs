@@ -164,6 +164,44 @@ async fn scan_and_search_should_work() {
     assert_eq!(spaced_prefixed_search["code"], 0);
     assert!(spaced_prefixed_search["data"]["total"].as_i64().unwrap_or(0) >= 1);
 
+    let favorite_set_resp = call_json(
+        &app,
+        Method::PATCH,
+        &format!("/rpc/v1/photos/{}/favorite", one_photo_id),
+        Some(json!({"favorite": true})),
+    )
+    .await;
+    assert_eq!(favorite_set_resp["code"], 0);
+
+    let favorite_list_resp = call_json(
+        &app,
+        Method::GET,
+        "/rpc/v1/photos/favorites?page=1&page_size=20",
+        None,
+    )
+    .await;
+    assert_eq!(favorite_list_resp["code"], 0);
+    assert!(favorite_list_resp["data"]["total"].as_i64().unwrap_or(0) >= 1);
+
+    let detail_after_favorite = call_json(
+        &app,
+        Method::GET,
+        &format!("/rpc/v1/photos/{}", one_photo_id),
+        None,
+    )
+    .await;
+    assert_eq!(detail_after_favorite["code"], 0);
+    assert_eq!(detail_after_favorite["data"]["is_favorite"], true);
+
+    let favorite_unset_resp = call_json(
+        &app,
+        Method::PATCH,
+        &format!("/rpc/v1/photos/{}/favorite", one_photo_id),
+        Some(json!({"favorite": false})),
+    )
+    .await;
+    assert_eq!(favorite_unset_resp["code"], 0);
+
     let albums_resp = call_json(&app, Method::GET, "/rpc/v1/albums", None).await;
     assert_eq!(albums_resp["code"], 0);
     let albums = albums_resp["data"].as_array().cloned().unwrap_or_default();

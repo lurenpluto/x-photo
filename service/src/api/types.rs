@@ -36,6 +36,11 @@ pub struct PhotoSearchRequest {
     pub page_size: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdatePhotoFavoriteRequest {
+    pub favorite: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PagedData<T> {
     pub total: i64,
@@ -111,6 +116,7 @@ pub struct AlbumSimple {
 pub struct PhotoDetailData {
     pub photo: crate::domain::models::Photo,
     pub albums: Vec<AlbumSimple>,
+    pub is_favorite: bool,
 }
 
 #[derive(Debug, Serialize)]

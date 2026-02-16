@@ -61,6 +61,12 @@ CREATE TABLE IF NOT EXISTS photo_albums (
   FOREIGN KEY (album_id) REFERENCES albums (id)
 );
 
+CREATE TABLE IF NOT EXISTS photo_favorites (
+  photo_id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (photo_id) REFERENCES photos (id)
+);
+
 CREATE TABLE IF NOT EXISTS scan_jobs (
   id TEXT PRIMARY KEY,
   source_id TEXT NOT NULL,
@@ -134,6 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_photos_shot_at ON photos (shot_at);
 CREATE INDEX IF NOT EXISTS idx_photos_file_name ON photos (file_name);
 CREATE INDEX IF NOT EXISTS idx_photos_source_path ON photos (source_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_photo_albums_album ON photo_albums (album_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_photo_favorites_created_at ON photo_favorites (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_name ON albums (name);
 CREATE INDEX IF NOT EXISTS idx_source_scan_states_status ON source_scan_states (status, updated_at DESC);

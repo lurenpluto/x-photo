@@ -26,7 +26,7 @@ use crate::api::types::{
     ActiveTaskQuery, FsWatchScanTriggerRequest, PagedData, PaginationQuery, PhotoDetailData,
     PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, DaemonTaskHealthItem,
     TaskHealthData, TaskHealthQuery, TaskJobData, TaskJobsQuery, TaskOverviewData,
-    TaskOverviewQuery, UpdateAlbumRequest, UpdatePhotoRemarkRequest,
+    TaskOverviewQuery, UpdateAlbumRequest, UpdatePhotoFavoriteRequest, UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
 use crate::domain::album_rules::{
@@ -1302,7 +1302,103 @@ pub async fn get_photo_detail(
         })
         .collect::<Vec<_>>();
 
-    Ok(Json(ApiResponse::ok(PhotoDetailData { photo, albums })))
+    let is_favorite: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1) FROM photo_favorites WHERE photo_id = ?",
+    )
+    .bind(&photo.id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("get_photo_detail.favorite", json!({"photo_id": photo.id}), err))?;
+
+    Ok(Json(ApiResponse::ok(PhotoDetailData {
+        photo,
+        albums,
+        is_favorite: is_favorite > 0,
+    })))
+}
+
+pub async fn list_favorite_photos(
+    Query(query): Query<PaginationQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<PagedData<Photo>>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(100).clamp(1, 500);
+    let offset = (page - 1) * page_size;
+
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(1)
+         FROM photo_favorites f
+         INNER JOIN photos p ON p.id = f.photo_id
+         WHERE p.deleted_at IS NULL",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("list_favorite_photos.count", json!({}), err))?;
+
+    let items = sqlx::query_as::<_, Photo>(
+        "SELECT p.id, p.source_id, p.storage_file_id, p.file_path, p.file_name, p.file_ext, p.file_size, p.mime_type,
+                p.content_hash, p.shot_at, p.created_at_fs, p.modified_at_fs, p.sort_time, p.width, p.height,
+                p.exif_json, p.gps_lat, p.gps_lng, p.remark, p.deleted_at, p.created_at, p.updated_at
+         FROM photo_favorites f
+         INNER JOIN photos p ON p.id = f.photo_id
+         WHERE p.deleted_at IS NULL
+         ORDER BY p.sort_time DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("list_favorite_photos.list", json!({"page": page, "page_size": page_size}), err))?;
+
+    Ok(Json(ApiResponse::ok(PagedData {
+        total,
+        page,
+        page_size,
+        items,
+    })))
+}
+
+pub async fn update_photo_favorite(
+    Path(photo_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<UpdatePhotoFavoriteRequest>,
+) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let photo_exists: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&photo_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("update_photo_favorite.check_photo", json!({"photo_id": photo_id}), err))?;
+
+    if photo_exists.is_none() {
+        return Err(bad_request("photo 不存在"));
+    }
+
+    let affected = if req.favorite {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO photo_favorites (photo_id, created_at)
+             VALUES (?, ?)
+             ON CONFLICT(photo_id) DO NOTHING",
+        )
+        .bind(&photo_id)
+        .bind(&now)
+        .execute(&state.pool)
+        .await
+        .map_err(|err| internal_db_error("update_photo_favorite.insert", json!({"photo_id": photo_id}), err))?
+        .rows_affected() as i64
+    } else {
+        sqlx::query("DELETE FROM photo_favorites WHERE photo_id = ?")
+            .bind(&photo_id)
+            .execute(&state.pool)
+            .await
+            .map_err(|err| internal_db_error("update_photo_favorite.delete", json!({"photo_id": photo_id}), err))?
+            .rows_affected() as i64
+    };
+
+    Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
 }
 
 pub async fn get_photo_file(
@@ -1654,6 +1750,10 @@ pub async fn batch_delete_photos(
         })?;
         affected += result.rows_affected() as i64;
         if result.rows_affected() > 0 {
+            let _ = sqlx::query("DELETE FROM photo_favorites WHERE photo_id = ?")
+                .bind(photo_id)
+                .execute(&state.pool)
+                .await;
             let _ = remove_photo_search_index_for_photo(&state.pool, photo_id).await;
         }
     }

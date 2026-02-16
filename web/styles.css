@@ -732,6 +732,15 @@ textarea {
   background: rgba(33, 52, 74, 0.72);
 }
 
+.icon-btn.active {
+  background: rgba(249, 197, 66, 0.24);
+  border-color: rgba(249, 197, 66, 0.72);
+}
+
+.icon-btn.active img {
+  filter: sepia(1) saturate(3) hue-rotate(340deg) brightness(1.05);
+}
+
 .icon-btn:disabled {
   opacity: 0.65;
   cursor: not-allowed;

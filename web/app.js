@@ -48,6 +48,10 @@ const state = {
       end_time: "",
     },
   },
+  favorite: {
+    page: 1,
+    total: 0,
+  },
   timers: {
     taskAutoRefresh: null,
     taskTickBusy: false,
@@ -62,6 +66,7 @@ const el = {
   sideNav: $("sideNav"),
   btnSidebarToggle: $("btnSidebarToggle"),
   tabPhotos: $("tab-photos"),
+  tabFavorites: $("tab-favorites"),
   tabAlbums: $("tab-albums"),
   tabSettings: $("tab-settings"),
   tabStatus: $("tab-status"),
@@ -85,6 +90,11 @@ const el = {
 
   btnReloadAlbums: $("btnReloadAlbums"),
   albumGrid: $("albumGrid"),
+  btnReloadFavorites: $("btnReloadFavorites"),
+  favoriteMasonry: $("favoriteMasonry"),
+  btnFavoritePrev: $("btnFavoritePrev"),
+  btnFavoriteNext: $("btnFavoriteNext"),
+  favoritePageHint: $("favoritePageHint"),
 
   apiBase: $("apiBase"),
   btnHealth: $("btnHealth"),
@@ -125,6 +135,7 @@ const el = {
   btnPhotoZoomIn: $("btnPhotoZoomIn"),
   btnPhotoZoomOut: $("btnPhotoZoomOut"),
   btnPhotoZoomReset: $("btnPhotoZoomReset"),
+  btnPhotoFavorite: $("btnPhotoFavorite"),
   btnPhotoHelp: $("btnPhotoHelp"),
   photoHelpPanel: $("photoHelpPanel"),
   photoGeoText: $("photoGeoText"),
@@ -500,7 +511,7 @@ async function api(path, options = {}) {
 }
 
 function updateTabUi() {
-  const tabs = ["photos", "albums", "settings", "status"];
+  const tabs = ["photos", "favorites", "albums", "settings", "status"];
   for (const tab of tabs) {
     const panel = $(`tab-${tab}`);
     if (panel) {
@@ -574,13 +585,16 @@ function goDetailUp() {
 }
 
 function setTab(tab) {
-  const valid = ["photos", "albums", "settings", "status"];
+  const valid = ["photos", "favorites", "albums", "settings", "status"];
   state.tab = valid.includes(tab) ? tab : "photos";
   if (state.detail.active) {
     goDetailUp();
   }
   location.hash = state.tab;
   updateTabUi();
+  if (state.tab === "favorites") {
+    void loadFavoritePhotos();
+  }
 }
 
 function initTabFromHash() {
@@ -871,6 +885,111 @@ function renderPhotos(data) {
       if (photoId) openPhotoDetailPage(photoId);
     });
   });
+}
+
+function renderFavoritePhotos(data) {
+  const items = data.items || [];
+  state.favorite.total = data.total ?? 0;
+  state.favorite.page = data.page ?? 1;
+  const pageSize = Number(el.photoPageSize.value) || 36;
+  const totalPages = Math.max(1, Math.ceil(state.favorite.total / pageSize));
+  el.favoritePageHint.textContent = `第 ${state.favorite.page} / ${totalPages} 页 · 共 ${state.favorite.total} 张`;
+  el.btnFavoritePrev.disabled = state.favorite.page <= 1;
+  el.btnFavoriteNext.disabled = state.favorite.page >= totalPages;
+
+  if (!items.length) {
+    el.favoriteMasonry.innerHTML = '<p class="hint">暂无收藏照片。</p>';
+    return;
+  }
+
+  const groups = new Map();
+  for (const p of items) {
+    const key = (p.sort_time || "").slice(0, 10) || "未知日期";
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(p);
+  }
+
+  const groupKeys = Array.from(groups.keys());
+  el.favoriteMasonry.innerHTML = groupKeys
+    .map((key) => {
+      const photos = groups.get(key) || [];
+      const cards = photos
+        .map((p) => {
+          const visual = photoVisualStyle(p);
+          return `
+        <article class="photo-card" data-favorite-photo-id="${p.id}">
+          <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+            <div class="photo-title">${escapeHtml(p.file_name)}</div>
+          </div>
+          <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
+        </article>
+      `;
+        })
+        .join("");
+      return `
+      <section class="photo-group">
+        <h3>${escapeHtml(formatPhotoGroupLabel(key))} <span class="hint">${escapeHtml(key)}</span></h3>
+        <div class="masonry-grid">${cards}</div>
+      </section>
+    `;
+    })
+    .join("");
+
+  el.favoriteMasonry.querySelectorAll("[data-favorite-photo-id]").forEach((card) => {
+    card.addEventListener("click", () => {
+      const photoId = card.getAttribute("data-favorite-photo-id");
+      if (photoId) openPhotoDetailPage(photoId);
+    });
+  });
+}
+
+async function loadFavoritePhotos() {
+  el.favoriteMasonry.innerHTML = '<div class="loading">加载收藏照片中...</div>';
+  try {
+    const pageSize = Number(el.photoPageSize.value) || 36;
+    const data = await api(`/photos/favorites?page=${state.favorite.page}&page_size=${pageSize}`, {
+      method: "GET",
+    });
+    renderFavoritePhotos(data);
+  } catch (err) {
+    el.favoriteMasonry.innerHTML = `<p class="hint">加载失败: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadFavoritePage(page) {
+  const pageSize = Number(el.photoPageSize.value) || 36;
+  const totalPages = Math.max(1, Math.ceil(state.favorite.total / pageSize));
+  state.favorite.page = Math.max(1, Math.min(totalPages, page));
+  await loadFavoritePhotos();
+}
+
+function setPhotoFavoriteUi(isFavorite) {
+  if (!el.btnPhotoFavorite) return;
+  el.btnPhotoFavorite.classList.toggle("active", Boolean(isFavorite));
+  el.btnPhotoFavorite.title = isFavorite ? "取消收藏" : "收藏";
+}
+
+async function toggleSelectedPhotoFavorite() {
+  if (!state.selectedPhotoId) return;
+  const next = !el.btnPhotoFavorite.classList.contains("active");
+  el.btnPhotoFavorite.disabled = true;
+  try {
+    await api(`/photos/${state.selectedPhotoId}/favorite`, {
+      method: "PATCH",
+      body: JSON.stringify({ favorite: next }),
+    });
+    setPhotoFavoriteUi(next);
+    showToast(next ? "已收藏" : "已取消收藏");
+    if (state.tab === "favorites") {
+      await loadFavoritePhotos();
+    }
+  } catch (err) {
+    showToast(`收藏操作失败: ${err.message}`, "error");
+  } finally {
+    el.btnPhotoFavorite.disabled = false;
+  }
 }
 
 function bindHorizontalDragScroll(container) {
@@ -1223,6 +1342,7 @@ async function removePhotoFromAlbum(albumId) {
 async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
   state.selectedPhotoId = photoId;
   el.photoDetailMsg.textContent = "加载详情...";
+  setPhotoFavoriteUi(false);
   openDetailView("photo", "照片详情", { photoId }, options);
   togglePhotoHelp(false);
   updateDrawerNavButtons();
@@ -1283,6 +1403,7 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     }
 
     el.photoRemark.value = p.remark || "";
+    setPhotoFavoriteUi(Boolean(data.is_favorite));
     el.photoDetailMsg.textContent = "";
     updateDrawerNavButtons();
   } catch (err) {
@@ -1633,12 +1754,21 @@ function bindEvents() {
   el.photoOrder.addEventListener("change", searchPhotos);
   el.photoStartDate.addEventListener("change", searchPhotos);
   el.photoEndDate.addEventListener("change", searchPhotos);
-  el.photoPageSize.addEventListener("change", searchPhotos);
+  el.photoPageSize.addEventListener("change", () => {
+    searchPhotos();
+    if (state.tab === "favorites") {
+      state.favorite.page = 1;
+      void loadFavoritePhotos();
+    }
+  });
   el.btnPhotoPrev.addEventListener("click", () => loadPhotoPage(state.photoPage - 1));
   el.btnPhotoNext.addEventListener("click", () => loadPhotoPage(state.photoPage + 1));
 
   el.btnReloadAlbumsPhotos.addEventListener("click", loadAlbums);
   el.btnReloadAlbums.addEventListener("click", loadAlbums);
+  el.btnReloadFavorites.addEventListener("click", loadFavoritePhotos);
+  el.btnFavoritePrev.addEventListener("click", () => loadFavoritePage(state.favorite.page - 1));
+  el.btnFavoriteNext.addEventListener("click", () => loadFavoritePage(state.favorite.page + 1));
 
   el.sourceForm.addEventListener("submit", createSource);
   el.btnReloadSources.addEventListener("click", loadSources);
@@ -1660,6 +1790,7 @@ function bindEvents() {
   el.btnPhotoZoomIn.addEventListener("click", () => zoomPhoto(0.2));
   el.btnPhotoZoomOut.addEventListener("click", () => zoomPhoto(-0.2));
   el.btnPhotoZoomReset.addEventListener("click", resetPhotoView);
+  el.btnPhotoFavorite.addEventListener("click", toggleSelectedPhotoFavorite);
   el.btnPhotoHelp.addEventListener("click", () => togglePhotoHelp());
 
   el.photoPreviewImg.addEventListener("wheel", onPhotoWheel);
