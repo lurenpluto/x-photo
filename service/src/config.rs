@@ -93,7 +93,7 @@ impl Default for AppConfig {
                 max_concurrent_jobs: 2,
                 checkpoint_every: 50,
                 search_index_sync_every: 100,
-                hash_parallelism: 4,
+                hash_parallelism: 0,
                 hash_batch_size: 32,
                 resume_enabled: true,
                 task_dispatch_interval_ms: 2000,
@@ -161,7 +161,7 @@ impl Default for ScanConfig {
             max_concurrent_jobs: 2,
             checkpoint_every: 50,
             search_index_sync_every: 100,
-            hash_parallelism: 4,
+            hash_parallelism: 0,
             hash_batch_size: 32,
             resume_enabled: true,
             task_dispatch_interval_ms: 2000,
@@ -410,7 +410,7 @@ allow_delete = false
 max_concurrent_jobs = 2
 checkpoint_every = 50
 search_index_sync_every = 100
-hash_parallelism = 4
+hash_parallelism = 0
 hash_batch_size = 32
 resume_enabled = true
 task_dispatch_interval_ms = 2000

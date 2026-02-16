@@ -2722,7 +2722,7 @@ async fn enqueue_scan_job(
     let job_id_for_task = job_id.clone();
     let checkpoint_every = state.config.scan.checkpoint_every.max(1);
     let search_index_sync_every = state.config.scan.search_index_sync_every.max(1);
-    let hash_parallelism = state.config.scan.hash_parallelism.max(1);
+    let hash_parallelism = state.config.scan.hash_parallelism;
     let hash_batch_size = state.config.scan.hash_batch_size.max(1);
     let resume_enabled = state.config.scan.resume_enabled;
     let album_rule_patterns = if state.config.album_rules.enabled {
@@ -2836,6 +2836,8 @@ async fn run_scan_job(
     hash_batch_size: usize,
     resume_enabled: bool,
 ) -> Result<(), String> {
+    let effective_hash_parallelism = resolve_hash_parallelism(hash_parallelism);
+
     let current_status: Option<String> = sqlx::query_scalar("SELECT status FROM scan_jobs WHERE id = ?")
         .bind(&job_id)
         .fetch_optional(&pool)
@@ -2981,12 +2983,12 @@ async fn run_scan_job(
     match collect_result {
         Ok(result) => {
             let hash_pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(hash_parallelism)
+                .num_threads(effective_hash_parallelism)
                 .build()
                 .map_err(|e| {
                     format!(
-                        "failed to create hash rayon pool (job_id={}, source_id={}, hash_parallelism={}): {}",
-                        job_id, source.id, hash_parallelism, e
+                        "failed to create hash rayon pool (job_id={}, source_id={}, hash_parallelism={}, effective_hash_parallelism={}): {}",
+                        job_id, source.id, hash_parallelism, effective_hash_parallelism, e
                     )
                 })?;
             let hash_pool = Arc::new(hash_pool);
@@ -3449,6 +3451,22 @@ fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidat
         sort_time,
         exif_json,
     })
+}
+
+fn resolve_hash_parallelism(configured: usize) -> usize {
+    if configured > 0 {
+        return configured;
+    }
+
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    if logical <= 2 {
+        logical.max(1)
+    } else {
+        logical.saturating_sub(2).max(2)
+    }
 }
 
 fn is_photo_path(path: &StdPath) -> bool {
