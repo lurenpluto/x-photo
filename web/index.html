@@ -42,9 +42,12 @@
 
       <main class="main">
         <section class="topbar panel">
-          <div class="search-shell">
-            <span class="search-icon"><img src="./icons/search.svg" alt="" /></span>
-            <input id="photoKeyword" list="searchHints" placeholder="搜索照片关键词（文件名/备注）" />
+          <div class="search-wrap">
+            <div class="search-shell">
+              <span class="search-icon"><img src="./icons/search.svg" alt="" /></span>
+              <input id="photoKeyword" placeholder="搜索照片关键词（文件名/备注）" />
+            </div>
+            <div id="searchSuggest" class="search-suggest hidden" role="listbox" aria-label="搜索建议"></div>
           </div>
           <button id="btnQuickSearch" class="btn">搜索</button>
           <div id="searchPrefixBar" class="search-prefix-bar">
@@ -58,17 +61,6 @@
           </div>
           <p id="searchExample" class="hint search-example">示例: album:旅行 camera:iPhone date:2025-12</p>
         </section>
-
-        <datalist id="searchHints">
-          <option value="album:"></option>
-          <option value="remark:"></option>
-          <option value="exif:"></option>
-          <option value="camera:"></option>
-          <option value="lens:"></option>
-          <option value="path:"></option>
-          <option value="source:"></option>
-          <option value="date:"></option>
-        </datalist>
 
         <section id="tab-photos" class="tab-panel active">
           <article class="panel">

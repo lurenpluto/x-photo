@@ -15,6 +15,11 @@ const state = {
     start_time: "",
     end_time: "",
   },
+  search: {
+    items: [],
+    activeIndex: -1,
+    history: [],
+  },
   selectedTaskId: null,
   selectedTask: null,
   selectedScanJobId: null,
@@ -74,6 +79,7 @@ const el = {
 
   photoKeyword: $("photoKeyword"),
   btnQuickSearch: $("btnQuickSearch"),
+  searchSuggest: $("searchSuggest"),
   searchPrefixBar: $("searchPrefixBar"),
   searchExample: $("searchExample"),
   btnReloadAlbumsPhotos: $("btnReloadAlbumsPhotos"),
@@ -168,6 +174,27 @@ const el = {
   btnAddToAlbum: $("btnAddToAlbum"),
   photoDetailMsg: $("photoDetailMsg"),
 };
+
+const SEARCH_PREFIXES = ["album:", "remark:", "exif:", "camera:", "lens:", "path:", "source:", "date:"];
+
+function loadSearchHistory() {
+  try {
+    const raw = localStorage.getItem("xphoto_search_history") || "[]";
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.map((v) => String(v || "").trim()).filter((v) => v).slice(0, 20);
+  } catch (_err) {
+    return [];
+  }
+}
+
+function saveSearchHistory(keyword) {
+  const value = String(keyword || "").trim();
+  if (!value) return;
+  const next = [value, ...state.search.history.filter((v) => v !== value)].slice(0, 20);
+  state.search.history = next;
+  localStorage.setItem("xphoto_search_history", JSON.stringify(next));
+}
 
 function escapeHtml(s) {
   return String(s)
@@ -268,6 +295,90 @@ function insertSearchPrefix(prefix) {
   el.photoKeyword.value = `${current}${suffix}${prefix}`;
   el.photoKeyword.focus();
   updateSearchExample();
+}
+
+function buildSearchSuggestions(inputText) {
+  const text = String(inputText || "").trim();
+  const lower = text.toLowerCase();
+  const out = [];
+  const used = new Set();
+  const addItem = (value, meta) => {
+    const k = `${value}::${meta}`;
+    if (used.has(k)) return;
+    used.add(k);
+    out.push({ value, meta });
+  };
+
+  const matchedPrefixes = SEARCH_PREFIXES.filter((p) => !text || p.includes(lower));
+  for (const prefix of matchedPrefixes) {
+    addItem(prefix, "字段前缀");
+  }
+
+  if (text.length > 0) {
+    const albumMatches = state.albums
+      .filter((a) => String(a.name || "").toLowerCase().includes(lower))
+      .slice(0, 6);
+    for (const album of albumMatches) {
+      addItem(`album:${album.name}`, "相册名");
+    }
+  }
+
+  const historyMatches = state.search.history
+    .filter((v) => !text || v.toLowerCase().includes(lower))
+    .slice(0, 8);
+  for (const item of historyMatches) {
+    addItem(item, "最近搜索");
+  }
+
+  return out.slice(0, 14);
+}
+
+function closeSearchSuggestions() {
+  state.search.items = [];
+  state.search.activeIndex = -1;
+  el.searchSuggest.classList.add("hidden");
+  el.searchSuggest.innerHTML = "";
+}
+
+function applySearchSuggestion(value) {
+  el.photoKeyword.value = value;
+  el.photoKeyword.focus();
+  updateSearchExample();
+  closeSearchSuggestions();
+}
+
+function renderSearchSuggestions() {
+  const items = buildSearchSuggestions(el.photoKeyword.value);
+  const prevValue = state.search.items[state.search.activeIndex]?.value;
+  state.search.items = items;
+  if (!items.length) {
+    closeSearchSuggestions();
+    return;
+  }
+  const matchIdx = prevValue ? items.findIndex((it) => it.value === prevValue) : -1;
+  state.search.activeIndex = matchIdx >= 0 ? matchIdx : Math.min(Math.max(state.search.activeIndex, 0), items.length - 1);
+  el.searchSuggest.innerHTML = items
+    .map(
+      (item, idx) => `
+      <button class="search-suggest-item ${idx === state.search.activeIndex ? "active" : ""}" type="button" data-search-suggest-index="${idx}">
+        <span class="search-suggest-main">${escapeHtml(item.value)}</span>
+        <span class="search-suggest-sub">${escapeHtml(item.meta)}</span>
+      </button>
+    `,
+    )
+    .join("");
+  el.searchSuggest.classList.remove("hidden");
+
+  el.searchSuggest.querySelectorAll("[data-search-suggest-index]").forEach((node) => {
+    node.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      const idx = Number(node.getAttribute("data-search-suggest-index"));
+      const item = state.search.items[idx];
+      if (item) {
+        applySearchSuggestion(item.value);
+      }
+    });
+  });
 }
 
 function setApiBase(value) {
@@ -1129,6 +1240,8 @@ async function fetchAndRenderPhotos() {
 async function searchPhotos(event) {
   if (event) event.preventDefault();
   syncPhotoFiltersFromForm(true);
+  saveSearchHistory(state.photoFilters.keyword);
+  closeSearchSuggestions();
   await fetchAndRenderPhotos();
 }
 
@@ -1796,11 +1909,43 @@ function bindEvents() {
 
   el.btnQuickSearch.addEventListener("click", searchPhotos);
   el.photoKeyword.addEventListener("keydown", (event) => {
+    const suggestOpen = !el.searchSuggest.classList.contains("hidden") && state.search.items.length > 0;
+    if (suggestOpen && event.key === "ArrowDown") {
+      event.preventDefault();
+      state.search.activeIndex = (state.search.activeIndex + 1) % state.search.items.length;
+      renderSearchSuggestions();
+      return;
+    }
+    if (suggestOpen && event.key === "ArrowUp") {
+      event.preventDefault();
+      state.search.activeIndex = (state.search.activeIndex - 1 + state.search.items.length) % state.search.items.length;
+      renderSearchSuggestions();
+      return;
+    }
     if (event.key === "Enter") {
+      if (suggestOpen && state.search.activeIndex >= 0) {
+        event.preventDefault();
+        const item = state.search.items[state.search.activeIndex];
+        if (item) {
+          applySearchSuggestion(item.value);
+        }
+        return;
+      }
       searchPhotos(event);
+      return;
+    }
+    if (event.key === "Escape") {
+      closeSearchSuggestions();
     }
   });
-  el.photoKeyword.addEventListener("input", updateSearchExample);
+  el.photoKeyword.addEventListener("input", () => {
+    updateSearchExample();
+    renderSearchSuggestions();
+  });
+  el.photoKeyword.addEventListener("focus", renderSearchSuggestions);
+  el.photoKeyword.addEventListener("blur", () => {
+    window.setTimeout(() => closeSearchSuggestions(), 120);
+  });
   el.searchPrefixBar.querySelectorAll("[data-prefix]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const prefix = btn.getAttribute("data-prefix");
@@ -1876,10 +2021,17 @@ function bindEvents() {
   el.btnAlbumDetailNext.addEventListener("click", () => loadAlbumDetailPage(state.albumDetail.page + 1));
 
   document.addEventListener("keydown", onKeydown);
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.closest(".search-wrap")) return;
+    closeSearchSuggestions();
+  });
   bindHorizontalDragScroll(el.latestAlbumsRow);
 }
 
 async function boot() {
+  state.search.history = loadSearchHistory();
   readPhotoStateFromUrl();
   bindEvents();
   startTaskAutoRefresh();
