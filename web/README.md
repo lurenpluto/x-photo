@@ -4,6 +4,32 @@
 
 ## 运行方式
 
+### 一键启动（推荐）
+
+- Linux/macOS:
+
+```bash
+./start.sh
+```
+
+- Windows PowerShell:
+
+```powershell
+.\start.ps1
+```
+
+- Windows CMD:
+
+```bat
+start.bat
+```
+
+默认地址：Web `http://127.0.0.1:5174`，API `http://127.0.0.1:8080/rpc/v1`。
+
+可通过环境变量覆盖：`SERVICE_HOST`、`SERVICE_PORT`、`WEB_HOST`、`WEB_PORT`。
+
+### 手动启动
+
 1. 启动后端服务：
 
 ```bash
