@@ -129,6 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_photos_file_name ON photos (file_name);
 CREATE INDEX IF NOT EXISTS idx_photos_source_path ON photos (source_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_photo_albums_album ON photo_albums (album_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_albums_name ON albums (name);
 CREATE INDEX IF NOT EXISTS idx_source_scan_states_status ON source_scan_states (status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_jobs_status_run_after ON task_jobs (status, run_after);
 CREATE INDEX IF NOT EXISTS idx_task_jobs_type_status ON task_jobs (job_type, status, created_at DESC);

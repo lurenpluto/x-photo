@@ -922,7 +922,17 @@ fn apply_photo_search_filters(
         builder.push(" OR p.file_path LIKE ");
         builder.push_bind(like.clone());
         builder.push(" OR IFNULL(p.remark, '') LIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR IFNULL(p.exif_json, '') LIKE ");
+        builder.push_bind(like.clone());
+        builder.push(" OR EXISTS (");
+        builder.push(
+            "SELECT 1 FROM photo_albums pa
+             INNER JOIN albums a ON a.id = pa.album_id
+             WHERE pa.photo_id = p.id AND a.name LIKE ",
+        );
         builder.push_bind(like);
+        builder.push(")");
         builder.push(")");
     }
 

@@ -45,6 +45,7 @@ async fn scan_and_search_should_work() {
     let mut cfg = AppConfig::default();
     cfg.scan.max_concurrent_jobs = 1;
     cfg.scan.task_dispatch_interval_ms = 200;
+    let pool_for_test = pool.clone();
     let app = api::router(pool, cfg);
 
     let create_source_resp = call_json(
@@ -111,6 +112,37 @@ async fn scan_and_search_should_work() {
     assert_eq!(search_resp["code"], 0);
     let total = search_resp["data"]["total"].as_i64().unwrap_or(0);
     assert!(total >= 3, "expected >=3 photos, got {}", total);
+
+    let album_keyword_search = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/photos/search",
+        Some(json!({"keyword": "Test.Album", "page": 1, "page_size": 20})),
+    )
+    .await;
+    assert_eq!(album_keyword_search["code"], 0);
+    assert!(album_keyword_search["data"]["total"].as_i64().unwrap_or(0) >= 1);
+
+    let one_photo_id = search_resp["data"]["items"][0]["id"]
+        .as_str()
+        .expect("photo id from search")
+        .to_string();
+    sqlx::query("UPDATE photos SET exif_json = ? WHERE id = ?")
+        .bind(r#"{"Model":"XPhotoCam","LensModel":"SearchableLens777"}"#)
+        .bind(&one_photo_id)
+        .execute(&pool_for_test)
+        .await
+        .expect("update exif_json for search test");
+
+    let exif_keyword_search = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/photos/search",
+        Some(json!({"keyword": "SearchableLens777", "page": 1, "page_size": 20})),
+    )
+    .await;
+    assert_eq!(exif_keyword_search["code"], 0);
+    assert!(exif_keyword_search["data"]["total"].as_i64().unwrap_or(0) >= 1);
 
     let albums_resp = call_json(&app, Method::GET, "/rpc/v1/albums", None).await;
     assert_eq!(albums_resp["code"], 0);
