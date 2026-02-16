@@ -702,10 +702,16 @@ textarea {
   display: block;
   transition: transform 120ms ease;
   cursor: grab;
+  opacity: 0;
+  transition: transform 120ms ease, opacity 180ms ease;
 }
 
 .photo-stage img.dragging {
   cursor: grabbing;
+}
+
+.photo-stage img.loaded {
+  opacity: 1;
 }
 
 .zoom-badge {
@@ -720,6 +726,18 @@ textarea {
   padding: 0.18rem 0.55rem;
 }
 
+.zoom-hint {
+  position: absolute;
+  right: 0.8rem;
+  bottom: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(216, 230, 247, 0.2);
+  background: rgba(15, 23, 34, 0.44);
+  color: rgba(216, 230, 247, 0.9);
+  font-size: 0.72rem;
+  padding: 0.18rem 0.5rem;
+}
+
 .photo-side {
   border: 1px solid rgba(33, 48, 65, 0.14);
   border-radius: 14px;
@@ -728,6 +746,15 @@ textarea {
   display: grid;
   align-content: start;
   gap: 0.6rem;
+}
+
+.photo-side .kv {
+  grid-template-columns: 92px 1fr;
+  gap: 0.3rem 0.45rem;
+}
+
+.photo-side .kv p {
+  font-size: 0.8rem;
 }
 
 .meta-section {

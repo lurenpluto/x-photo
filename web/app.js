@@ -1082,6 +1082,7 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
     const p = data.photo;
     el.detailTitle.textContent = `照片详情 · ${p.file_name || "未命名"}`;
     const v = Date.now();
+    el.photoPreviewImg.classList.remove("loaded");
     el.photoPreviewImg.src = `${state.apiBase}/photos/${photoId}/file?v=${v}`;
     el.photoPreviewImg.alt = p.file_name || "照片预览";
     resetPhotoView();
@@ -1142,24 +1143,44 @@ function renderAlbumDetailPhotos(items) {
     return;
   }
 
-  const cards = items
-    .map((p) => {
-      const visual = photoVisualStyle(p);
+  const groups = new Map();
+  for (const p of items) {
+    const key = (p.sort_time || "").slice(0, 10) || "未知日期";
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(p);
+  }
+
+  const groupKeys = Array.from(groups.keys());
+  el.albumDetailPhotos.innerHTML = groupKeys
+    .map((key) => {
+      const photos = groups.get(key) || [];
+      const cards = photos
+        .map((p) => {
+          const visual = photoVisualStyle(p);
+          return `
+        <article class="photo-card" data-album-photo-id="${p.id}">
+          <span class="preview-fab">预览</span>
+          <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+            <div class="photo-title">${escapeHtml(p.file_name)}</div>
+          </div>
+          <p class="item-sub">${escapeHtml(p.file_path)}</p>
+          <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
+          <span class="preview-entry">预览</span>
+        </article>
+      `;
+        })
+        .join("");
       return `
-      <article class="photo-card" data-album-photo-id="${p.id}">
-        <span class="preview-fab">预览</span>
-        <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
-          <div class="photo-title">${escapeHtml(p.file_name)}</div>
-        </div>
-        <p class="item-sub">${escapeHtml(p.file_path)}</p>
-        <p class="item-sub">sort: ${escapeHtml(p.sort_time)}</p>
-        <span class="preview-entry">预览</span>
-      </article>
+      <section class="photo-group">
+        <h3>${escapeHtml(formatPhotoGroupLabel(key))} <span class="hint">${escapeHtml(key)}</span></h3>
+        <div class="masonry-grid">${cards}</div>
+      </section>
     `;
     })
     .join("");
 
-  el.albumDetailPhotos.innerHTML = `<div class="masonry-grid">${cards}</div>`;
   el.albumDetailPhotos.querySelectorAll("[data-album-photo-id]").forEach((node) => {
     node.addEventListener("click", () => {
       const photoId = node.getAttribute("data-album-photo-id");
@@ -1467,6 +1488,10 @@ function bindEvents() {
   el.photoPreviewImg.addEventListener("wheel", onPhotoWheel);
   el.photoPreviewImg.addEventListener("mousedown", startPhotoDrag);
   el.photoPreviewImg.addEventListener("dblclick", onPhotoDoubleClick);
+  el.photoPreviewImg.addEventListener("load", () => {
+    el.photoPreviewImg.classList.add("loaded");
+    applyPhotoTransform();
+  });
   window.addEventListener("mouseup", endPhotoDrag);
   window.addEventListener("mousemove", movePhotoDrag);
 
