@@ -57,8 +57,10 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 const el = {
+  layout: document.querySelector(".layout"),
   main: document.querySelector(".main"),
   sideNav: $("sideNav"),
+  btnSidebarToggle: $("btnSidebarToggle"),
   tabPhotos: $("tab-photos"),
   tabAlbums: $("tab-albums"),
   tabSettings: $("tab-settings"),
@@ -257,6 +259,16 @@ function insertSearchPrefix(prefix) {
 function setApiBase(value) {
   state.apiBase = value.replace(/\/$/, "");
   localStorage.setItem("xphoto_api_base", state.apiBase);
+}
+
+function setSidebarCollapsed(collapsed) {
+  el.layout.classList.toggle("sidebar-collapsed", collapsed);
+  localStorage.setItem("xphoto_sidebar_collapsed", collapsed ? "1" : "0");
+}
+
+function toggleSidebarCollapsed() {
+  const collapsed = !el.layout.classList.contains("sidebar-collapsed");
+  setSidebarCollapsed(collapsed);
 }
 
 function dateToStartIso(dateValue) {
@@ -1558,6 +1570,9 @@ function onKeydown(event) {
 }
 
 function bindEvents() {
+  const sidebarCollapsed = localStorage.getItem("xphoto_sidebar_collapsed") === "1";
+  setSidebarCollapsed(sidebarCollapsed);
+
   el.apiBase.value = state.apiBase;
   el.apiBase.addEventListener("change", () => setApiBase(el.apiBase.value.trim()));
   el.btnHealth.addEventListener("click", checkHealth);
@@ -1577,6 +1592,7 @@ function bindEvents() {
       setTab(tab);
     }
   });
+  el.btnSidebarToggle.addEventListener("click", toggleSidebarCollapsed);
 
   el.btnQuickSearch.addEventListener("click", searchPhotos);
   el.photoKeyword.addEventListener("keydown", (event) => {
