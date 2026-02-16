@@ -41,7 +41,9 @@ Write-Host "[x-photo] Building service..."
 & cargo build --manifest-path $serviceManifest
 
 $serviceLog = Join-Path $rootDir ".service.log"
+$serviceErrLog = Join-Path $rootDir ".service.err.log"
 $webLog = Join-Path $rootDir ".web.log"
+$webErrLog = Join-Path $rootDir ".web.err.log"
 $servicePidFile = Join-Path $rootDir ".service.pid"
 $webPidFile = Join-Path $rootDir ".web.pid"
 
@@ -50,18 +52,18 @@ $webProc = $null
 
 try {
   Write-Host "[x-photo] Starting service on http://$serviceHost`:$servicePort ..."
-  $serviceProc = Start-Process -FilePath "cargo" -ArgumentList @("run", "--manifest-path", $serviceManifest) -WorkingDirectory $rootDir -RedirectStandardOutput $serviceLog -RedirectStandardError $serviceLog -PassThru
+  $serviceProc = Start-Process -FilePath "cargo" -ArgumentList @("run", "--manifest-path", $serviceManifest) -WorkingDirectory $rootDir -RedirectStandardOutput $serviceLog -RedirectStandardError $serviceErrLog -PassThru
   Set-Content -Path $servicePidFile -Value $serviceProc.Id -NoNewline
 
   Write-Host "[x-photo] Starting web on http://$webHost`:$webPort ..."
   $webArgs = @() + $pythonArgsPrefix + @("-m", "http.server", $webPort, "--bind", $webHost, "--directory", $webDir)
-  $webProc = Start-Process -FilePath $pythonExe -ArgumentList $webArgs -WorkingDirectory $rootDir -RedirectStandardOutput $webLog -RedirectStandardError $webLog -PassThru
+  $webProc = Start-Process -FilePath $pythonExe -ArgumentList $webArgs -WorkingDirectory $rootDir -RedirectStandardOutput $webLog -RedirectStandardError $webErrLog -PassThru
   Set-Content -Path $webPidFile -Value $webProc.Id -NoNewline
 
   Write-Host "[x-photo] Ready"
   Write-Host "  - Web: http://$webHost`:$webPort"
   Write-Host "  - API: http://$serviceHost`:$servicePort/rpc/v1"
-  Write-Host "[x-photo] Logs: $serviceLog, $webLog"
+  Write-Host "[x-photo] Logs: $serviceLog, $serviceErrLog, $webLog, $webErrLog"
   Write-Host "[x-photo] Pid files: $servicePidFile, $webPidFile"
   Write-Host "[x-photo] Press Ctrl+C to stop both services."
 

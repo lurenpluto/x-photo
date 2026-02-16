@@ -5,5 +5,7 @@ service/logs/
 *.db-wal
 .service.log
 .web.log
+.service.err.log
+.web.err.log
 .service.pid
 .web.pid
