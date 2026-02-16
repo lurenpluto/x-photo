@@ -119,6 +119,8 @@ const el = {
   btnPhotoZoomIn: $("btnPhotoZoomIn"),
   btnPhotoZoomOut: $("btnPhotoZoomOut"),
   btnPhotoZoomReset: $("btnPhotoZoomReset"),
+  btnPhotoHelp: $("btnPhotoHelp"),
+  photoHelpPanel: $("photoHelpPanel"),
   photoGeoText: $("photoGeoText"),
   photoGeoLink: $("photoGeoLink"),
   photoExifMeta: $("photoExifMeta"),
@@ -134,6 +136,7 @@ const el = {
   btnAlbumDetailPrev: $("btnAlbumDetailPrev"),
   btnAlbumDetailNext: $("btnAlbumDetailNext"),
   albumDetailPageHint: $("albumDetailPageHint"),
+  toastContainer: $("toastContainer"),
 
   btnDrawerPrev: $("btnDrawerPrev"),
   btnDrawerNext: $("btnDrawerNext"),
@@ -228,6 +231,24 @@ function setHealthText(text, ok = true) {
 
 function buildMapUrl(lat, lng) {
   return `https://www.google.com/maps?q=${encodeURIComponent(`${lat},${lng}`)}`;
+}
+
+function showToast(text, kind = "info") {
+  if (!el.toastContainer) return;
+  const node = document.createElement("div");
+  node.className = `toast ${kind === "error" ? "error" : ""}`;
+  node.textContent = text;
+  el.toastContainer.appendChild(node);
+  window.setTimeout(() => {
+    node.remove();
+  }, 2600);
+}
+
+function togglePhotoHelp(force) {
+  if (!el.photoHelpPanel) return;
+  const willShow = typeof force === "boolean" ? force : el.photoHelpPanel.classList.contains("hidden");
+  el.photoHelpPanel.classList.toggle("hidden", !willShow);
+  el.photoHelpPanel.setAttribute("aria-hidden", willShow ? "false" : "true");
 }
 
 function parseExifJson(exifJson) {
@@ -442,6 +463,9 @@ function openDetailView(type, title, payload, options = { pushHistory: true }) {
   el.photoDetailPage.classList.toggle("hidden", type !== "photo");
   el.albumDetailPage.classList.toggle("hidden", type !== "album");
   el.photoDetailNav.classList.toggle("hidden", type !== "photo");
+  if (type !== "photo") {
+    togglePhotoHelp(false);
+  }
 }
 
 function closeDetailView() {
@@ -464,6 +488,7 @@ function closeDetailView() {
   el.main.classList.remove("detail-open");
   el.detailView.classList.remove("open");
   el.detailView.setAttribute("aria-hidden", "true");
+  togglePhotoHelp(false);
 }
 
 function setTab(tab) {
@@ -644,10 +669,12 @@ async function createSource(event) {
       }),
     });
     el.sourceMessage.textContent = "创建成功";
+    showToast("Source 创建成功");
     el.sourceForm.reset();
     await loadSources();
   } catch (err) {
     el.sourceMessage.textContent = `创建失败: ${err.message}`;
+    showToast(`创建失败: ${err.message}`, "error");
   }
 }
 
@@ -1066,9 +1093,11 @@ async function removePhotoFromAlbum(albumId) {
       body: JSON.stringify({ photo_ids: [state.selectedPhotoId] }),
     });
     el.photoDetailMsg.textContent = "已从相册移除";
+    showToast("已从相册移除");
     await openPhotoDetailPage(state.selectedPhotoId);
   } catch (err) {
     el.photoDetailMsg.textContent = `移除失败: ${err.message}`;
+    showToast(`移除失败: ${err.message}`, "error");
   }
 }
 
@@ -1076,6 +1105,7 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
   state.selectedPhotoId = photoId;
   el.photoDetailMsg.textContent = "加载详情...";
   openDetailView("photo", "照片详情", { photoId }, options);
+  togglePhotoHelp(false);
   updateDrawerNavButtons();
   try {
     const data = await api(`/photos/${photoId}`, { method: "GET" });
@@ -1310,9 +1340,11 @@ async function saveRemark() {
       body: JSON.stringify({ remark: el.photoRemark.value }),
     });
     el.photoDetailMsg.textContent = "备注已保存";
+    showToast("备注已保存");
     await fetchAndRenderPhotos();
   } catch (err) {
     el.photoDetailMsg.textContent = `保存失败: ${err.message}`;
+    showToast(`保存失败: ${err.message}`, "error");
   }
 }
 
@@ -1330,9 +1362,11 @@ async function addPhotoToAlbum() {
       body: JSON.stringify({ album_id: albumId, photo_ids: [state.selectedPhotoId] }),
     });
     el.photoDetailMsg.textContent = "已加入相册";
+    showToast("已加入相册");
     await openPhotoDetailPage(state.selectedPhotoId);
   } catch (err) {
     el.photoDetailMsg.textContent = `加入失败: ${err.message}`;
+    showToast(`加入失败: ${err.message}`, "error");
   }
 }
 
@@ -1366,6 +1400,11 @@ function onKeydown(event) {
   }
 
   if (state.detail.active && state.detail.type === "photo") {
+    if (event.key === "?" || (event.shiftKey && event.key === "/")) {
+      event.preventDefault();
+      togglePhotoHelp();
+      return;
+    }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       moveDrawerPhoto(-1);
@@ -1484,6 +1523,7 @@ function bindEvents() {
   el.btnPhotoZoomIn.addEventListener("click", () => zoomPhoto(0.2));
   el.btnPhotoZoomOut.addEventListener("click", () => zoomPhoto(-0.2));
   el.btnPhotoZoomReset.addEventListener("click", resetPhotoView);
+  el.btnPhotoHelp.addEventListener("click", () => togglePhotoHelp());
 
   el.photoPreviewImg.addEventListener("wheel", onPhotoWheel);
   el.photoPreviewImg.addEventListener("mousedown", startPhotoDrag);

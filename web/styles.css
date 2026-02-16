@@ -738,6 +738,62 @@ textarea {
   padding: 0.18rem 0.5rem;
 }
 
+.help-panel {
+  position: absolute;
+  right: 0.8rem;
+  top: 3.1rem;
+  border-radius: 12px;
+  border: 1px solid rgba(216, 230, 247, 0.28);
+  background: rgba(15, 23, 34, 0.84);
+  color: #d8e6f7;
+  padding: 0.55rem 0.7rem;
+  min-width: 220px;
+  z-index: 2;
+}
+
+.help-panel h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.82rem;
+}
+
+.help-panel p {
+  margin: 0.24rem 0;
+  font-size: 0.76rem;
+}
+
+kbd {
+  border: 1px solid rgba(216, 230, 247, 0.38);
+  border-radius: 6px;
+  padding: 0.05rem 0.3rem;
+  font-size: 0.72rem;
+  background: rgba(216, 230, 247, 0.08);
+}
+
+.toast-container {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 90;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.toast {
+  border-radius: 10px;
+  border: 1px solid rgba(33, 48, 65, 0.2);
+  background: rgba(255, 255, 255, 0.92);
+  color: #1d2a38;
+  padding: 0.45rem 0.62rem;
+  font-size: 0.82rem;
+  min-width: 180px;
+  box-shadow: 0 8px 18px rgba(17, 27, 39, 0.15);
+}
+
+.toast.error {
+  border-color: rgba(180, 83, 9, 0.4);
+  background: rgba(255, 248, 238, 0.96);
+}
+
 .photo-side {
   border: 1px solid rgba(33, 48, 65, 0.14);
   border-radius: 14px;

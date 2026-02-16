@@ -212,10 +212,22 @@
                   <button class="icon-btn" type="button" title="删除" disabled>
                     <img src="./icons/trash.svg" alt="" />
                   </button>
+                  <button id="btnPhotoHelp" class="icon-btn" type="button" title="快捷键帮助">
+                    <img src="./icons/help.svg" alt="" />
+                  </button>
                 </header>
                 <img id="photoPreviewImg" alt="照片预览" />
                 <span id="photoZoomBadge" class="zoom-badge">100%</span>
                 <span class="zoom-hint">滚轮缩放 · 双击聚焦 · 拖拽平移</span>
+
+                <aside id="photoHelpPanel" class="help-panel hidden" aria-hidden="true">
+                  <h4>快捷键</h4>
+                  <p><kbd>/</kbd> 聚焦搜索</p>
+                  <p><kbd>←</kbd> / <kbd>→</kbd> 切换上一张/下一张</p>
+                  <p><kbd>+</kbd> / <kbd>-</kbd> 缩放</p>
+                  <p><kbd>0</kbd> 重置缩放</p>
+                  <p><kbd>Esc</kbd> 返回上一层</p>
+                </aside>
               </section>
               <section class="photo-side">
                 <details class="meta-section" open>
@@ -293,6 +305,8 @@
         </section>
       </main>
     </div>
+
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
     <template id="sourceItemTpl">
       <div class="list-item">
