@@ -1009,7 +1009,7 @@ fn apply_photo_search_filters(
 
     if !album_id.is_empty() {
         builder.push(
-            " AND EXISTS (SELECT 1 FROM photo_albums pa WHERE pa.photo_id = p.id AND pa.album_id = ",
+            " AND p.id IN (SELECT pa.photo_id FROM photo_albums pa WHERE pa.album_id = ",
         );
         builder.push_bind(album_id.to_string());
         builder.push(")");

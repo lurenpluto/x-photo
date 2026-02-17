@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create_if_missing(true);
 
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(12)
         .connect_with(connect_opts)
         .await
         .map_err(|e| {

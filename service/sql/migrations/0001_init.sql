@@ -140,6 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_photos_shot_at ON photos (shot_at);
 CREATE INDEX IF NOT EXISTS idx_photos_file_name ON photos (file_name);
 CREATE INDEX IF NOT EXISTS idx_photos_source_path ON photos (source_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_photo_albums_album ON photo_albums (album_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_photo_albums_album_photo ON photo_albums (album_id, photo_id);
 CREATE INDEX IF NOT EXISTS idx_photo_favorites_created_at ON photo_favorites (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_created_at ON albums (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_albums_name ON albums (name);
