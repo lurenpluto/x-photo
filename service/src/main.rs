@@ -1,9 +1,10 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use axum::Router;
 use service::{api, config, db, logging};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use tracing::{error, info};
 
 fn env_or_unset(key: &str) -> String {
@@ -122,6 +123,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             error!("{}", msg);
             msg
         })?
+        .busy_timeout(Duration::from_secs(30))
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
         .create_if_missing(true);
 
     let pool = SqlitePoolOptions::new()
