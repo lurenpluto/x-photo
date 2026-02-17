@@ -1427,12 +1427,14 @@ pub async fn get_photo_file(
 
     let candidates = resolve_photo_file_candidates(&file_path, source_root.as_deref());
     let mut bytes: Option<Vec<u8>> = None;
+    let mut resolved_path: Option<String> = None;
     let mut tried = Vec::new();
     for candidate in &candidates {
         tried.push(candidate.to_string_lossy().to_string());
         match tokio::fs::read(candidate).await {
             Ok(v) => {
                 bytes = Some(v);
+                resolved_path = Some(candidate.to_string_lossy().to_string());
                 break;
             }
             Err(_) => continue,
@@ -1455,6 +1457,8 @@ pub async fn get_photo_file(
         ));
     };
 
+    let bytes_len = bytes.len();
+
     let content_type = mime_type
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| guess_mime_by_file_path(&file_path));
@@ -1467,6 +1471,14 @@ pub async fn get_photo_file(
     if let Ok(v) = HeaderValue::from_str(&content_type) {
         response.headers_mut().insert(header::CONTENT_TYPE, v);
     }
+
+    info!(
+        photo_id,
+        resolved_path = ?resolved_path,
+        bytes_len,
+        content_type,
+        "get_photo_file completed"
+    );
 
     Ok(response)
 }
@@ -1492,13 +1504,13 @@ fn resolve_photo_file_candidates(file_path: &str, source_root: Option<&str>) -> 
 fn expand_tilde_path(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
     if trimmed == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home);
+        if let Some(home) = dirs::home_dir() {
+            return home;
         }
     }
-    if let Some(stripped) = trimmed.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(stripped);
+    if let Some(stripped) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(stripped);
         }
     }
     PathBuf::from(trimmed)
