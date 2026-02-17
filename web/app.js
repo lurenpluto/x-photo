@@ -954,6 +954,20 @@ function renderPhotoFilterChips() {
   el.photoFilterChips.innerHTML = chips.map((txt) => `<span class="chip">${txt}</span>`).join("");
 }
 
+function bindPhotoThumbFallback(container, imgAttr, fallbackAttr) {
+  container.querySelectorAll(`[${imgAttr}]`).forEach((img) => {
+    img.addEventListener("error", () => {
+      img.classList.add("hidden");
+      const id = img.getAttribute(imgAttr);
+      if (!id) return;
+      const fallback = container.querySelector(`[${fallbackAttr}="${id}"]`);
+      if (fallback) {
+        fallback.classList.remove("hidden");
+      }
+    });
+  });
+}
+
 function renderPhotos(data) {
   const items = data.items || [];
   state.photoItems = items.map((p) => p.id);
@@ -992,6 +1006,8 @@ function renderPhotos(data) {
           return `
         <article class="photo-card" data-photo-id="${p.id}">
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+            <img class="photo-thumb-img" data-photo-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/file" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
+            <div class="photo-thumb-fallback hidden" data-photo-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
           <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
@@ -1014,6 +1030,8 @@ function renderPhotos(data) {
       if (photoId) openPhotoDetailPage(photoId);
     });
   });
+
+  bindPhotoThumbFallback(el.photoMasonry, "data-photo-thumb-id", "data-photo-thumb-fallback-id");
 }
 
 function renderFavoritePhotos(data) {
@@ -1057,6 +1075,8 @@ function renderFavoritePhotos(data) {
         <article class="photo-card" data-favorite-photo-id="${p.id}">
           <button class="favorite-remove-btn" type="button" data-favorite-remove-id="${p.id}" title="取消收藏">取消收藏</button>
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+            <img class="photo-thumb-img" data-favorite-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/file" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
+            <div class="photo-thumb-fallback hidden" data-favorite-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
           <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
@@ -1080,6 +1100,8 @@ function renderFavoritePhotos(data) {
       if (photoId) openPhotoDetailPage(photoId);
     });
   });
+
+  bindPhotoThumbFallback(el.favoriteMasonry, "data-favorite-thumb-id", "data-favorite-thumb-fallback-id");
 
   el.favoriteMasonry.querySelectorAll("[data-favorite-remove-id]").forEach((btn) => {
     btn.addEventListener("click", async (event) => {
@@ -1660,7 +1682,9 @@ async function openPhotoDetailPage(photoId, options = { pushHistory: true }) {
 
     el.photoRemark.value = p.remark || "";
     setPhotoFavoriteUi(Boolean(data.is_favorite));
-    el.photoDetailMsg.textContent = "";
+    const ext = String(p.file_ext || "").toLowerCase();
+    const likelyUnsupported = ext === "heic" || ext === "heif";
+    el.photoDetailMsg.textContent = likelyUnsupported ? "当前浏览器可能不支持 HEIC/HEIF 预览，请考虑转换为 JPG/PNG。" : "";
     updateDrawerNavButtons();
   } catch (err) {
     el.photoDetailMsg.textContent = `详情加载失败: ${err.message}`;
@@ -1693,6 +1717,8 @@ function renderAlbumDetailPhotos(items) {
         <article class="photo-card" data-album-photo-id="${p.id}">
           <span class="preview-fab">预览</span>
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
+            <img class="photo-thumb-img" data-album-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/file" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
+            <div class="photo-thumb-fallback hidden" data-album-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
           <p class="item-sub">拍摄时间: ${escapeHtml(formatShotTime(p.sort_time))}</p>
@@ -1718,6 +1744,8 @@ function renderAlbumDetailPhotos(items) {
       }
     });
   });
+
+  bindPhotoThumbFallback(el.albumDetailPhotos, "data-album-thumb-id", "data-album-thumb-fallback-id");
 }
 
 function syncAlbumDetailFiltersFromForm(resetPage = false) {
@@ -2089,7 +2117,8 @@ function bindEvents() {
     applyPhotoTransform();
   });
   el.photoPreviewImg.addEventListener("error", () => {
-    showToast("照片加载失败，请检查文件路径与权限", "error");
+    el.photoDetailMsg.textContent = "照片加载失败：若文件为 HEIC/HEIF，可能是浏览器不支持该格式。";
+    showToast("照片加载失败：可能是浏览器不支持 HEIC/HEIF", "error");
   });
   window.addEventListener("mouseup", endPhotoDrag);
   window.addEventListener("mousemove", movePhotoDrag);
