@@ -42,6 +42,8 @@ pub struct PreviewCacheConfig {
     pub ttl_hours: u64,
     pub max_bytes: u64,
     pub cleanup_interval_seconds: u64,
+    pub warmup_on_scan: bool,
+    pub warmup_concurrency: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +105,8 @@ impl Default for AppConfig {
                 ttl_hours: 168,
                 max_bytes: 8 * 1024 * 1024 * 1024,
                 cleanup_interval_seconds: 300,
+                warmup_on_scan: true,
+                warmup_concurrency: 2,
             },
             storage: StorageConfig {
                 allow_delete: false,
@@ -181,6 +185,8 @@ impl Default for PreviewCacheConfig {
             ttl_hours: 168,
             max_bytes: 8 * 1024 * 1024 * 1024,
             cleanup_interval_seconds: 300,
+            warmup_on_scan: true,
+            warmup_concurrency: 2,
         }
     }
 }
@@ -271,6 +277,16 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(v) = std::env::var("PREVIEW_CACHE_CLEANUP_INTERVAL_SECONDS") {
         if let Ok(n) = v.parse::<u64>() {
             config.preview_cache.cleanup_interval_seconds = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_WARMUP_ON_SCAN") {
+        if let Ok(b) = v.parse::<bool>() {
+            config.preview_cache.warmup_on_scan = b;
+        }
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_WARMUP_CONCURRENCY") {
+        if let Ok(n) = v.parse::<usize>() {
+            config.preview_cache.warmup_concurrency = n;
         }
     }
     if let Ok(v) = std::env::var("SCAN_MAX_CONCURRENT_JOBS") {
@@ -470,6 +486,8 @@ dir = "cache/previews"
 ttl_hours = 168
 max_bytes = 8589934592
 cleanup_interval_seconds = 300
+warmup_on_scan = true
+warmup_concurrency = 2
 
 [storage]
 allow_delete = false

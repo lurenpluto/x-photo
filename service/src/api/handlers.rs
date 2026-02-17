@@ -20,6 +20,7 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
+use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, warn};
 
@@ -2796,6 +2797,8 @@ async fn enqueue_scan_job(
     let hash_parallelism = state.config.scan.hash_parallelism;
     let hash_batch_size = state.config.scan.hash_batch_size.max(1);
     let resume_enabled = state.config.scan.resume_enabled;
+    let preview_cache = state.config.preview_cache.clone();
+    let preview_warmup_limiter = state.preview_warmup_limiter.clone();
     let album_rule_patterns = if state.config.album_rules.enabled {
         build_album_rule_patterns(&state.config)
     } else {
@@ -2819,6 +2822,8 @@ async fn enqueue_scan_job(
             search_index_sync_every,
             hash_parallelism,
             hash_batch_size,
+            preview_cache,
+            preview_warmup_limiter,
             resume_enabled,
         )
         .await
@@ -2905,6 +2910,8 @@ async fn run_scan_job(
     search_index_sync_every: usize,
     hash_parallelism: usize,
     hash_batch_size: usize,
+    preview_cache: PreviewCacheConfig,
+    preview_warmup_limiter: Arc<Semaphore>,
     resume_enabled: bool,
 ) -> Result<(), String> {
     let effective_hash_parallelism = resolve_hash_parallelism(hash_parallelism);
@@ -3261,6 +3268,13 @@ async fn run_scan_job(
                                 ));
                             }
                         } else {
+                            enqueue_preview_warmup_if_needed(
+                                &preview_cache,
+                                &preview_warmup_limiter,
+                                &candidate.file_path,
+                                Some(&source.root_path),
+                            );
+
                             match ensure_album_by_dir_rule(
                                 &pool,
                                 &source.id,
@@ -3352,6 +3366,49 @@ async fn run_scan_job(
                 if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
                     warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining photos");
                 }
+            }
+
+            if is_cancel_requested(&pool, &job_id).await? {
+                let finished_at = Utc::now().to_rfc3339();
+                sqlx::query(
+                    "UPDATE scan_jobs
+                     SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
+                     WHERE id = ?",
+                )
+                .bind(&finished_at)
+                .bind(processed_count)
+                .bind(last_scanned_path.as_deref())
+                .bind(total_count)
+                .bind(new_count)
+                .bind(updated_count)
+                .bind(failed_count)
+                .bind("cancel requested before marking success")
+                .bind(&job_id)
+                .execute(&pool)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "failed to switch scan job {} status running->cancelled for source {}: {}",
+                        job_id, source.id, e
+                    )
+                })?;
+
+                upsert_source_scan_state(
+                    &pool,
+                    &source.id,
+                    "cancelled",
+                    Some(&running_at),
+                    Some(&finished_at),
+                    last_scanned_path.as_deref(),
+                    last_scanned_storage_file_id.as_deref(),
+                    last_scanned_modified_at.as_deref(),
+                    last_scanned_content_hash.as_deref(),
+                    Some("cancel requested before marking success"),
+                )
+                .await?;
+
+                info!(job_id, source_id = source.id, from = "running", to = "cancelled", "scan job status transition");
+                return Ok(());
             }
 
             let finished_at = Utc::now().to_rfc3339();
@@ -3540,6 +3597,45 @@ async fn get_or_build_preview_jpeg(
     tokio::task::spawn_blocking(move || get_or_build_preview_jpeg_blocking(&cfg, &src))
         .await
         .map_err(|e| format!("preview build join failed (source={}): {}", source_path.display(), e))?
+}
+
+fn enqueue_preview_warmup_if_needed(
+    cache_config: &PreviewCacheConfig,
+    limiter: &Arc<Semaphore>,
+    file_path: &str,
+    source_root: Option<&str>,
+) {
+    if !cache_config.enabled || !cache_config.warmup_on_scan {
+        return;
+    }
+
+    let Some(resolved_path) = resolve_existing_photo_file(file_path, source_root) else {
+        return;
+    };
+    if !is_heic_path(&resolved_path) {
+        return;
+    }
+
+    let cache_cfg = cache_config.clone();
+    let limiter = limiter.clone();
+    tokio::spawn(async move {
+        let permit = limiter.acquire_owned().await;
+        if permit.is_err() {
+            return;
+        }
+        let _permit_guard = permit.ok();
+
+        if let Err(e) = get_or_build_preview_jpeg(&cache_cfg, &resolved_path).await {
+            warn!(file_path = %resolved_path.to_string_lossy(), error = %e, "failed to warmup preview cache on scan");
+        }
+    });
+}
+
+fn resolve_existing_photo_file(file_path: &str, source_root: Option<&str>) -> Option<PathBuf> {
+    let candidates = resolve_photo_file_candidates(file_path, source_root);
+    candidates
+        .into_iter()
+        .find(|candidate| fs::metadata(candidate).is_ok())
 }
 
 fn get_or_build_preview_jpeg_blocking(

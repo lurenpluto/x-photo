@@ -17,14 +17,17 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: AppConfig,
     pub scan_limiter: Arc<Semaphore>,
+    pub preview_warmup_limiter: Arc<Semaphore>,
 }
 
 pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
     let limiter_size = config.scan.max_concurrent_jobs.max(1);
+    let preview_warmup_size = config.preview_cache.warmup_concurrency.max(1);
     let state = Arc::new(AppState {
         pool,
         config,
         scan_limiter: Arc::new(Semaphore::new(limiter_size)),
+        preview_warmup_limiter: Arc::new(Semaphore::new(preview_warmup_size)),
     });
 
     handlers::start_task_dispatcher(state.clone());
