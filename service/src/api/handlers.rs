@@ -4,6 +4,8 @@ use std::path::Path as StdPath;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+#[cfg(feature = "heif_native")]
+use std::sync::Once;
 use std::time::UNIX_EPOCH;
 
 use axum::{
@@ -3689,6 +3691,12 @@ fn get_or_build_preview_jpeg_blocking(
 fn convert_to_jpeg(source_path: &StdPath, out_path: &StdPath) -> Result<(), String> {
     let mut errors = Vec::new();
 
+    if let Err(e) = try_convert_to_jpeg_native(source_path, out_path) {
+        errors.push(e);
+    } else {
+        return Ok(());
+    }
+
     let magick = Command::new("magick")
         .arg(source_path)
         .arg("-auto-orient")
@@ -3726,6 +3734,27 @@ fn convert_to_jpeg(source_path: &StdPath, out_path: &StdPath) -> Result<(), Stri
         source_path.display(),
         errors.join(" | ")
     ))
+}
+
+#[cfg(feature = "heif_native")]
+fn try_convert_to_jpeg_native(source_path: &StdPath, out_path: &StdPath) -> Result<(), String> {
+    static HEIF_HOOK_INIT: Once = Once::new();
+    HEIF_HOOK_INIT.call_once(|| {
+        libheif_rs::integration::image::register_all_decoding_hooks();
+    });
+
+    let img = image::ImageReader::open(source_path)
+        .map_err(|e| format!("native HEIF reader open failed: {}", e))?
+        .decode()
+        .map_err(|e| format!("native HEIF decode failed: {}", e))?;
+
+    img.save_with_format(out_path, image::ImageFormat::Jpeg)
+        .map_err(|e| format!("native HEIF save jpeg failed: {}", e))
+}
+
+#[cfg(not(feature = "heif_native"))]
+fn try_convert_to_jpeg_native(_source_path: &StdPath, _out_path: &StdPath) -> Result<(), String> {
+    Err("native HEIF converter disabled (build with feature `heif_native`)".to_string())
 }
 
 fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheConfig) -> Result<(), String> {
