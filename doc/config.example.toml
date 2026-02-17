@@ -1,0 +1,51 @@
+# X-Photo config template
+# 复制后按需修改：
+#   Linux/macOS: ~/.xphoto/config.toml
+#   Windows: %USERPROFILE%\.xphoto\config.toml
+
+root = "~/.xphoto"
+
+[server]
+# 默认仅监听本机，外网访问前请先补齐认证
+bind_addr = "127.0.0.1:8080"
+
+[database]
+url = "sqlite://data/xphoto.db"
+
+[logging]
+dir = "logs"
+level = "info"
+
+[preview_cache]
+enabled = true
+dir = "cache/previews"
+ttl_hours = 168
+# 支持 bytes 或带单位字符串（B/KB/MB/GB/TB）
+max_bytes = "8GB"
+cleanup_interval_seconds = 300
+# 扫描时预热 HEIC/HEIF 预览
+warmup_on_scan = true
+warmup_concurrency = 2
+
+[storage]
+allow_delete = false
+
+[scan]
+max_concurrent_jobs = 2
+# 扫描任务进度写入频率
+checkpoint_every = 50
+# 搜索索引增量同步频率
+search_index_sync_every = 100
+# 0 表示自动推导并行度
+hash_parallelism = 0
+hash_batch_size = 32
+resume_enabled = true
+task_dispatch_interval_ms = 2000
+task_stale_seconds = 120
+source_change_detect_enabled = true
+source_change_detect_interval_ms = 10000
+
+[album_rules]
+enabled = true
+date_delimiters = [".", "-", "_", "年", "月"]
+regex_patterns = []

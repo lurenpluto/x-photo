@@ -60,6 +60,7 @@ start.bat
 ## 常用文档
 
 - 完整指南（开发/测试/联调）：[`doc/快速开始与使用指南.md`](doc/快速开始与使用指南.md)
+- 配置模板（含全部字段）：[`doc/config.example.toml`](doc/config.example.toml)
 - 简版手册（面向非开发用户）：[`doc/用户操作手册（简版）.md`](doc/用户操作手册（简版）.md)
 - Web 控制台说明：[`web/README.md`](web/README.md)
 - 后端 OpenAPI：[`doc/OpenAPI.yaml`](doc/OpenAPI.yaml)
