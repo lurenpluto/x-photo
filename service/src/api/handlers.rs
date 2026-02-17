@@ -2033,8 +2033,8 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
             error!(error = %e, "failed to bootstrap failed sources for retry");
         }
 
-        if let Err(e) = rebuild_photo_search_index_all(&state.pool).await {
-            error!(error = %e, "failed to rebuild photo search index on startup");
+        if let Err(e) = bootstrap_photo_search_index_if_needed(&state.pool).await {
+            error!(error = %e, "failed to bootstrap photo search index on startup");
         }
 
         let mut source_fingerprints: HashMap<String, String> = HashMap::new();
@@ -3752,6 +3752,31 @@ async fn fetch_photo_ids_by_album(pool: &SqlitePool, album_id: &str) -> Result<V
     .fetch_all(pool)
     .await
     .map_err(|e| format!("failed to fetch photo ids by album (album_id={}): {}", album_id, e))
+}
+
+async fn bootstrap_photo_search_index_if_needed(pool: &SqlitePool) -> Result<(), String> {
+    let photo_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM photos WHERE deleted_at IS NULL")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("failed to count photos for search index bootstrap: {}", e))?;
+
+    let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM photo_search_fts")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| format!("failed to count photo_search_fts rows for bootstrap: {}", e))?;
+
+    if photo_count == 0 {
+        info!("skip photo search index bootstrap because no photos exist");
+        return Ok(());
+    }
+
+    if fts_count > 0 {
+        info!(photo_count, fts_count, "skip photo search index full rebuild because index rows already exist");
+        return Ok(());
+    }
+
+    info!(photo_count, "photo search index empty, running one-time full rebuild");
+    rebuild_photo_search_index_all(pool).await
 }
 
 async fn rebuild_photo_search_index_all(pool: &SqlitePool) -> Result<(), String> {
