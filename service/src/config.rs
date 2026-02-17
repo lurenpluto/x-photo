@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -40,6 +40,7 @@ pub struct PreviewCacheConfig {
     pub enabled: bool,
     pub dir: String,
     pub ttl_hours: u64,
+    #[serde(deserialize_with = "deserialize_size_bytes")]
     pub max_bytes: u64,
     pub cleanup_interval_seconds: u64,
     pub warmup_on_scan: bool,
@@ -270,7 +271,7 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
         }
     }
     if let Ok(v) = std::env::var("PREVIEW_CACHE_MAX_BYTES") {
-        if let Ok(n) = v.parse::<u64>() {
+        if let Ok(n) = parse_size_bytes(&v) {
             config.preview_cache.max_bytes = n;
         }
     }
@@ -390,6 +391,62 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     })
 }
 
+fn deserialize_size_bytes<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum RawSize {
+        Int(u64),
+        Text(String),
+    }
+
+    match RawSize::deserialize(deserializer)? {
+        RawSize::Int(v) => Ok(v),
+        RawSize::Text(v) => parse_size_bytes(&v).map_err(serde::de::Error::custom),
+    }
+}
+
+fn parse_size_bytes(raw: &str) -> Result<u64, String> {
+    let text = raw.trim().to_ascii_uppercase();
+    if text.is_empty() {
+        return Err("empty size value".to_string());
+    }
+
+    let split_at = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (num_part, unit_part) = text.split_at(split_at);
+    if num_part.is_empty() {
+        return Err(format!("invalid size '{}': missing number", raw));
+    }
+
+    let num = num_part
+        .parse::<f64>()
+        .map_err(|e| format!("invalid size '{}': {}", raw, e))?;
+    let unit = unit_part.trim();
+    let mul: f64 = match unit {
+        "" | "B" => 1.0,
+        "K" | "KB" => 1024.0,
+        "M" | "MB" => 1024.0 * 1024.0,
+        "G" | "GB" => 1024.0 * 1024.0 * 1024.0,
+        "T" | "TB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => {
+            return Err(format!(
+                "invalid size unit '{}' in '{}', use B/KB/MB/GB/TB",
+                unit, raw
+            ))
+        }
+    };
+
+    let bytes = num * mul;
+    if !bytes.is_finite() || bytes < 0.0 {
+        return Err(format!("invalid size '{}': out of range", raw));
+    }
+    Ok(bytes.round() as u64)
+}
+
 fn resolve_config_path() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
     for i in 0..args.len() {
@@ -484,7 +541,7 @@ level = "info"
 enabled = true
 dir = "cache/previews"
 ttl_hours = 168
-max_bytes = 8589934592
+max_bytes = "8GB"
 cleanup_interval_seconds = 300
 warmup_on_scan = true
 warmup_concurrency = 2
