@@ -3697,36 +3697,39 @@ fn convert_to_jpeg(source_path: &StdPath, out_path: &StdPath) -> Result<(), Stri
         return Ok(());
     }
 
-    let magick = Command::new("magick")
-        .arg(source_path)
-        .arg("-auto-orient")
-        .arg("-strip")
-        .arg("-quality")
-        .arg("88")
-        .arg(out_path)
-        .output();
-    match magick {
-        Ok(out) if out.status.success() => return Ok(()),
-        Ok(out) => errors.push(format!(
-            "magick failed (code={:?}): {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
-        )),
-        Err(e) => errors.push(format!("magick not available or failed to start: {}", e)),
+    for cmd in resolve_converter_command_candidates("magick") {
+        let output = Command::new(&cmd)
+            .arg(source_path)
+            .arg("-auto-orient")
+            .arg("-strip")
+            .arg("-quality")
+            .arg("88")
+            .arg(out_path)
+            .output();
+        match output {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => errors.push(format!(
+                "magick failed (cmd={}, code={:?}): {}",
+                cmd.display(),
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            )),
+            Err(e) => errors.push(format!("magick unavailable (cmd={}): {}", cmd.display(), e)),
+        }
     }
 
-    let heif_convert = Command::new("heif-convert")
-        .arg(source_path)
-        .arg(out_path)
-        .output();
-    match heif_convert {
-        Ok(out) if out.status.success() => return Ok(()),
-        Ok(out) => errors.push(format!(
-            "heif-convert failed (code={:?}): {}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
-        )),
-        Err(e) => errors.push(format!("heif-convert not available or failed to start: {}", e)),
+    for cmd in resolve_converter_command_candidates("heif-convert") {
+        let output = Command::new(&cmd).arg(source_path).arg(out_path).output();
+        match output {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => errors.push(format!(
+                "heif-convert failed (cmd={}, code={:?}): {}",
+                cmd.display(),
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            )),
+            Err(e) => errors.push(format!("heif-convert unavailable (cmd={}): {}", cmd.display(), e)),
+        }
     }
 
     Err(format!(
@@ -3734,6 +3737,48 @@ fn convert_to_jpeg(source_path: &StdPath, out_path: &StdPath) -> Result<(), Stri
         source_path.display(),
         errors.join(" | ")
     ))
+}
+
+fn resolve_converter_command_candidates(tool: &str) -> Vec<PathBuf> {
+    let mut out = Vec::<PathBuf>::new();
+    let mut seen = HashSet::<String>::new();
+
+    let mut push_candidate = |path: PathBuf| {
+        push_command_candidate_variants(path, &mut out, &mut seen);
+    };
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            push_candidate(exe_dir.join(tool));
+            push_candidate(exe_dir.join("bin").join(tool));
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        push_candidate(cwd.join(tool));
+        push_candidate(cwd.join("bin").join(tool));
+    }
+
+    push_candidate(PathBuf::from(tool));
+    out
+}
+
+fn push_command_candidate_variants(path: PathBuf, out: &mut Vec<PathBuf>, seen: &mut HashSet<String>) {
+    let key = path.to_string_lossy().to_string();
+    if seen.insert(key) {
+        out.push(path.clone());
+    }
+
+    #[cfg(windows)]
+    {
+        if path.extension().is_none() {
+            let exe_path = path.with_extension("exe");
+            let exe_key = exe_path.to_string_lossy().to_string();
+            if seen.insert(exe_key) {
+                out.push(exe_path);
+            }
+        }
+    }
 }
 
 #[cfg(feature = "heif_native")]
