@@ -3747,6 +3747,26 @@ fn resolve_converter_command_candidates(tool: &str) -> Vec<PathBuf> {
         push_command_candidate_variants(path, &mut out, &mut seen);
     };
 
+    match tool {
+        "magick" => {
+            if let Ok(v) = std::env::var("PREVIEW_MAGICK_PATH") {
+                let trimmed = v.trim();
+                if !trimmed.is_empty() {
+                    push_candidate(PathBuf::from(trimmed));
+                }
+            }
+        }
+        "heif-convert" => {
+            if let Ok(v) = std::env::var("PREVIEW_HEIF_CONVERT_PATH") {
+                let trimmed = v.trim();
+                if !trimmed.is_empty() {
+                    push_candidate(PathBuf::from(trimmed));
+                }
+            }
+        }
+        _ => {}
+    }
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             push_candidate(exe_dir.join(tool));
@@ -3757,6 +3777,21 @@ fn resolve_converter_command_candidates(tool: &str) -> Vec<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         push_candidate(cwd.join(tool));
         push_candidate(cwd.join("bin").join(tool));
+    }
+
+    #[cfg(windows)]
+    {
+        if let Ok(out_where) = Command::new("where").arg(tool).output() {
+            if out_where.status.success() {
+                let text = String::from_utf8_lossy(&out_where.stdout);
+                for line in text.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        push_candidate(PathBuf::from(trimmed));
+                    }
+                }
+            }
+        }
     }
 
     push_candidate(PathBuf::from(tool));
