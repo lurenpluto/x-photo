@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use tokio::time::{sleep, Duration};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::api::types::{
     AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
@@ -295,7 +295,7 @@ pub async fn get_scan_job(
     Path(job_id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Value>>, (StatusCode, Json<ApiResponse<Value>>)> {
-    info!(job_id, "get_scan_job requested");
+    debug!(job_id, "get_scan_job requested");
 
     let row = sqlx::query(
         "SELECT id, source_id, trigger_type, status, cancel_requested, processed_count, resume_cursor_path, started_at, finished_at, total_count, new_count, updated_count, failed_count, error_message
@@ -498,7 +498,7 @@ pub async fn list_task_jobs(
     let job_type = query.job_type.unwrap_or_default().trim().to_string();
     let status = query.status.unwrap_or_default().trim().to_string();
 
-    info!(page, page_size, job_type = %job_type, status = %status, "list_task_jobs requested");
+    debug!(page, page_size, job_type = %job_type, status = %status, "list_task_jobs requested");
 
     let mut count_builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM task_jobs tj WHERE 1=1");
     apply_task_job_filters(&mut count_builder, &job_type, &status);
@@ -555,7 +555,7 @@ pub async fn list_active_task_jobs(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<TaskJobData>>>, (StatusCode, Json<ApiResponse<Value>>)> {
     let include_all_daemon = query.include_all_daemon.unwrap_or(true);
-    info!(include_all_daemon, "list_active_task_jobs requested");
+    debug!(include_all_daemon, "list_active_task_jobs requested");
     let items = fetch_active_tasks(&state.pool, include_all_daemon)
         .await
         .map_err(|err| {
@@ -573,7 +573,7 @@ pub async fn get_task_health(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<TaskHealthData>>, (StatusCode, Json<ApiResponse<Value>>)> {
     let stale_after_seconds = query.stale_after_seconds.unwrap_or(15).max(1);
-    info!(stale_after_seconds, "get_task_health requested");
+    debug!(stale_after_seconds, "get_task_health requested");
 
     let health = fetch_task_health(&state.pool, stale_after_seconds)
         .await
@@ -594,7 +594,7 @@ pub async fn get_task_overview(
 ) -> Result<Json<ApiResponse<TaskOverviewData>>, (StatusCode, Json<ApiResponse<Value>>)> {
     let include_all_daemon = query.include_all_daemon.unwrap_or(true);
     let stale_after_seconds = query.stale_after_seconds.unwrap_or(15).max(1);
-    info!(include_all_daemon, stale_after_seconds, "get_task_overview requested");
+    debug!(include_all_daemon, stale_after_seconds, "get_task_overview requested");
 
     let active_tasks = fetch_active_tasks(&state.pool, include_all_daemon)
         .await
@@ -623,7 +623,7 @@ pub async fn get_task_job(
     Path(job_id): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<TaskJobData>>, (StatusCode, Json<ApiResponse<Value>>)> {
-    info!(job_id, "get_task_job requested");
+    debug!(job_id, "get_task_job requested");
 
     let row = sqlx::query(
         "SELECT id, job_type, trigger_type, status, is_daemon, heartbeat_at, scan_job_id, payload_json, checkpoint_json,

@@ -35,9 +35,9 @@ pub fn router(pool: SqlitePool, config: AppConfig) -> Router {
         .allow_headers(Any);
 
     let trace = TraceLayer::new_for_http()
-        .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
-        .on_request(tower_http::trace::DefaultOnRequest::new().level(Level::INFO))
-        .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::INFO))
+        .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::DEBUG))
+        .on_request(tower_http::trace::DefaultOnRequest::new().level(Level::DEBUG))
+        .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::DEBUG))
         .on_failure(tower_http::trace::DefaultOnFailure::new().level(Level::ERROR));
 
     Router::new()
