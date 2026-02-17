@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
+    pub preview_cache: PreviewCacheConfig,
     pub storage: StorageConfig,
     pub scan: ScanConfig,
     pub album_rules: AlbumRulesConfig,
@@ -31,6 +32,16 @@ pub struct DatabaseConfig {
 pub struct LoggingConfig {
     pub dir: String,
     pub level: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PreviewCacheConfig {
+    pub enabled: bool,
+    pub dir: String,
+    pub ttl_hours: u64,
+    pub max_bytes: u64,
+    pub cleanup_interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +96,13 @@ impl Default for AppConfig {
             logging: LoggingConfig {
                 dir: "logs".to_string(),
                 level: "info".to_string(),
+            },
+            preview_cache: PreviewCacheConfig {
+                enabled: true,
+                dir: "cache/previews".to_string(),
+                ttl_hours: 168,
+                max_bytes: 8 * 1024 * 1024 * 1024,
+                cleanup_interval_seconds: 300,
             },
             storage: StorageConfig {
                 allow_delete: false,
@@ -155,6 +173,18 @@ impl Default for StorageConfig {
     }
 }
 
+impl Default for PreviewCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dir: "cache/previews".to_string(),
+            ttl_hours: 168,
+            max_bytes: 8 * 1024 * 1024 * 1024,
+            cleanup_interval_seconds: 300,
+        }
+    }
+}
+
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
@@ -219,6 +249,29 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     }
     if let Ok(log_level) = std::env::var("LOG_LEVEL") {
         config.logging.level = log_level;
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_ENABLED") {
+        if let Ok(b) = v.parse::<bool>() {
+            config.preview_cache.enabled = b;
+        }
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_DIR") {
+        config.preview_cache.dir = v;
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_TTL_HOURS") {
+        if let Ok(n) = v.parse::<u64>() {
+            config.preview_cache.ttl_hours = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_MAX_BYTES") {
+        if let Ok(n) = v.parse::<u64>() {
+            config.preview_cache.max_bytes = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_CLEANUP_INTERVAL_SECONDS") {
+        if let Ok(n) = v.parse::<u64>() {
+            config.preview_cache.cleanup_interval_seconds = n;
+        }
     }
     if let Ok(v) = std::env::var("SCAN_MAX_CONCURRENT_JOBS") {
         if let Ok(n) = v.parse::<usize>() {
@@ -300,6 +353,14 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if log_dir_path.is_relative() {
         config.logging.dir = resolved_root
             .join(log_dir_path)
+            .to_string_lossy()
+            .to_string();
+    }
+
+    let preview_cache_dir_path = PathBuf::from(&config.preview_cache.dir);
+    if preview_cache_dir_path.is_relative() {
+        config.preview_cache.dir = resolved_root
+            .join(preview_cache_dir_path)
             .to_string_lossy()
             .to_string();
     }
@@ -402,6 +463,13 @@ url = "sqlite://data/xphoto.db"
 [logging]
 dir = "logs"
 level = "info"
+
+[preview_cache]
+enabled = true
+dir = "cache/previews"
+ttl_hours = 168
+max_bytes = 8589934592
+cleanup_interval_seconds = 300
 
 [storage]
 allow_delete = false

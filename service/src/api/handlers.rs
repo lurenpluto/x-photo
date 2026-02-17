@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::Path as StdPath;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -30,6 +32,7 @@ use crate::api::types::{
     TaskOverviewQuery, UpdateAlbumRequest, UpdatePhotoFavoriteRequest, UpdatePhotoRemarkRequest,
 };
 use crate::api::AppState;
+use crate::config::PreviewCacheConfig;
 use crate::domain::album_rules::{
     patterns_from_delimiters, parse_album_from_dir_name_with_patterns, AlbumRulePattern,
     RegexRulePattern,
@@ -1426,22 +1429,17 @@ pub async fn get_photo_file(
     let source_root: Option<String> = row.get("root_path");
 
     let candidates = resolve_photo_file_candidates(&file_path, source_root.as_deref());
-    let mut bytes: Option<Vec<u8>> = None;
-    let mut resolved_path: Option<String> = None;
+    let mut resolved_file: Option<PathBuf> = None;
     let mut tried = Vec::new();
     for candidate in &candidates {
         tried.push(candidate.to_string_lossy().to_string());
-        match tokio::fs::read(candidate).await {
-            Ok(v) => {
-                bytes = Some(v);
-                resolved_path = Some(candidate.to_string_lossy().to_string());
-                break;
-            }
-            Err(_) => continue,
+        if tokio::fs::metadata(candidate).await.is_ok() {
+            resolved_file = Some(candidate.clone());
+            break;
         }
     }
 
-    let Some(bytes) = bytes else {
+    let Some(resolved_file) = resolved_file else {
         error!(photo_id, file_path, source_root = ?source_root, tried = ?tried, "failed to resolve photo file from candidates");
         return Err((
             StatusCode::NOT_FOUND,
@@ -1457,11 +1455,55 @@ pub async fn get_photo_file(
         ));
     };
 
-    let bytes_len = bytes.len();
-
-    let content_type = mime_type
+    let mut served_kind = "original";
+    let mut content_type = mime_type
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| guess_mime_by_file_path(&file_path));
+
+    let bytes = if state.config.preview_cache.enabled && is_heic_path(&resolved_file) {
+        match get_or_build_preview_jpeg(&state.config.preview_cache, &resolved_file).await {
+            Ok(preview_path) => {
+                served_kind = "preview_jpeg";
+                content_type = "image/jpeg".to_string();
+                tokio::fs::read(&preview_path).await.map_err(|e| {
+                    internal_io_error(
+                        "get_photo_file.read_preview",
+                        json!({
+                            "photo_id": photo_id,
+                            "preview_path": preview_path.to_string_lossy().to_string()
+                        }),
+                        e,
+                    )
+                })?
+            }
+            Err(e) => {
+                warn!(photo_id, file_path, error = %e, "failed to build preview jpeg, fallback to original bytes");
+                tokio::fs::read(&resolved_file).await.map_err(|err| {
+                    internal_io_error(
+                        "get_photo_file.read_original",
+                        json!({
+                            "photo_id": photo_id,
+                            "resolved_path": resolved_file.to_string_lossy().to_string()
+                        }),
+                        err,
+                    )
+                })?
+            }
+        }
+    } else {
+        tokio::fs::read(&resolved_file).await.map_err(|err| {
+            internal_io_error(
+                "get_photo_file.read_original",
+                json!({
+                    "photo_id": photo_id,
+                    "resolved_path": resolved_file.to_string_lossy().to_string()
+                }),
+                err,
+            )
+        })?
+    };
+
+    let bytes_len = bytes.len();
 
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
@@ -1474,7 +1516,8 @@ pub async fn get_photo_file(
 
     info!(
         photo_id,
-        resolved_path = ?resolved_path,
+        resolved_path = %resolved_file.to_string_lossy(),
+        served_kind,
         bytes_len,
         content_type,
         "get_photo_file completed"
@@ -2015,6 +2058,22 @@ fn internal_db_error(
         Json(ApiResponse {
             code: 500,
             message: format!("db error at {}: {}", operation, err),
+            data: json!({}),
+        }),
+    )
+}
+
+fn internal_io_error(
+    operation: &str,
+    context: Value,
+    err: std::io::Error,
+) -> (StatusCode, Json<ApiResponse<Value>>) {
+    error!(operation, context = %context, error = %err, "io operation failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiResponse {
+            code: 500,
+            message: format!("io error at {}: {}", operation, err),
             data: json!({}),
         }),
     )
@@ -3463,6 +3522,179 @@ fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidat
         sort_time,
         exif_json,
     })
+}
+
+fn is_heic_path(path: &StdPath) -> bool {
+    matches!(
+        file_ext_lowercase(path).as_deref(),
+        Some("heic") | Some("heif")
+    )
+}
+
+async fn get_or_build_preview_jpeg(
+    cache_config: &PreviewCacheConfig,
+    source_path: &StdPath,
+) -> Result<PathBuf, String> {
+    let cfg = cache_config.clone();
+    let src = source_path.to_path_buf();
+    tokio::task::spawn_blocking(move || get_or_build_preview_jpeg_blocking(&cfg, &src))
+        .await
+        .map_err(|e| format!("preview build join failed (source={}): {}", source_path.display(), e))?
+}
+
+fn get_or_build_preview_jpeg_blocking(
+    cache_config: &PreviewCacheConfig,
+    source_path: &StdPath,
+) -> Result<PathBuf, String> {
+    let cache_dir = PathBuf::from(&cache_config.dir);
+    fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("failed to create preview cache dir {}: {}", cache_dir.display(), e))?;
+
+    maybe_cleanup_preview_cache(&cache_dir, cache_config)?;
+
+    let source_meta = fs::metadata(source_path)
+        .map_err(|e| format!("failed to stat source image {}: {}", source_path.display(), e))?;
+    let modified = source_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let key_raw = format!(
+        "{}|{}|{}",
+        source_path.to_string_lossy(),
+        source_meta.len(),
+        modified
+    );
+    let key = sha256_hex(&key_raw);
+    let cached = cache_dir.join(format!("{}.jpg", key));
+    if cached.exists() {
+        return Ok(cached);
+    }
+
+    let tmp = cache_dir.join(format!("{}.tmp.jpg", key));
+    if tmp.exists() {
+        let _ = fs::remove_file(&tmp);
+    }
+
+    convert_to_jpeg(source_path, &tmp)?;
+    fs::rename(&tmp, &cached).map_err(|e| {
+        format!(
+            "failed to move preview image {} -> {}: {}",
+            tmp.display(),
+            cached.display(),
+            e
+        )
+    })?;
+
+    Ok(cached)
+}
+
+fn convert_to_jpeg(source_path: &StdPath, out_path: &StdPath) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    let magick = Command::new("magick")
+        .arg(source_path)
+        .arg("-auto-orient")
+        .arg("-strip")
+        .arg("-quality")
+        .arg("88")
+        .arg(out_path)
+        .output();
+    match magick {
+        Ok(out) if out.status.success() => return Ok(()),
+        Ok(out) => errors.push(format!(
+            "magick failed (code={:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        )),
+        Err(e) => errors.push(format!("magick not available or failed to start: {}", e)),
+    }
+
+    let heif_convert = Command::new("heif-convert")
+        .arg(source_path)
+        .arg(out_path)
+        .output();
+    match heif_convert {
+        Ok(out) if out.status.success() => return Ok(()),
+        Ok(out) => errors.push(format!(
+            "heif-convert failed (code={:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        )),
+        Err(e) => errors.push(format!("heif-convert not available or failed to start: {}", e)),
+    }
+
+    Err(format!(
+        "failed to convert {} to jpeg. tried converters: {}",
+        source_path.display(),
+        errors.join(" | ")
+    ))
+}
+
+fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheConfig) -> Result<(), String> {
+    let marker = cache_dir.join(".cleanup.marker");
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if let Ok(text) = fs::read_to_string(&marker) {
+        if let Ok(last) = text.trim().parse::<u64>() {
+            if now_secs.saturating_sub(last) < cache_config.cleanup_interval_seconds {
+                return Ok(());
+            }
+        }
+    }
+
+    let ttl_secs = cache_config.ttl_hours.saturating_mul(3600);
+    let mut files = Vec::<(PathBuf, u64, u64)>::new();
+    for entry in fs::read_dir(cache_dir)
+        .map_err(|e| format!("failed to read preview cache dir {}: {}", cache_dir.display(), e))?
+    {
+        let entry = match entry {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if path.extension().and_then(|v| v.to_str()) != Some("jpg") {
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(now_secs);
+        let size = meta.len();
+
+        if now_secs.saturating_sub(modified) > ttl_secs {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+
+        files.push((path, modified, size));
+    }
+
+    let mut total_size: u64 = files.iter().map(|(_, _, s)| *s).sum();
+    if total_size > cache_config.max_bytes {
+        files.sort_by_key(|(_, modified, _)| *modified);
+        for (path, _, size) in files {
+            if total_size <= cache_config.max_bytes {
+                break;
+            }
+            if fs::remove_file(&path).is_ok() {
+                total_size = total_size.saturating_sub(size);
+            }
+        }
+    }
+
+    let _ = fs::write(marker, now_secs.to_string());
+    Ok(())
 }
 
 fn resolve_hash_parallelism(configured: usize) -> usize {
