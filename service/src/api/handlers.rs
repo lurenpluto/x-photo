@@ -3388,7 +3388,8 @@ async fn run_scan_job(
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
             let mut touched_auto_album_ids: HashSet<String> = HashSet::new();
-            let mut pending_index_photo_ids: HashSet<String> = HashSet::new();
+            let mut pending_index_new_photo_ids: HashSet<String> = HashSet::new();
+            let mut pending_index_updated_photo_ids: HashSet<String> = HashSet::new();
             let mut last_scanned_path: Option<String> = None;
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
@@ -3577,6 +3578,7 @@ async fn run_scan_job(
                         last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
                         last_scanned_content_hash = Some(candidate.content_hash.clone());
 
+                        let is_new_photo = existing_meta.is_none();
                         if let Some(existing) = existing_meta {
                             if existing.content_hash.as_deref() == Some(candidate.content_hash.as_str()) {
                                 skipped_count += 1;
@@ -3700,7 +3702,11 @@ async fn run_scan_job(
                                 },
                             );
 
-                            pending_index_photo_ids.insert(photo_id);
+                            if is_new_photo {
+                                pending_index_new_photo_ids.insert(photo_id);
+                            } else {
+                                pending_index_updated_photo_ids.insert(photo_id);
+                            }
                         }
                     }
                 }
@@ -3752,7 +3758,8 @@ async fn run_scan_job(
                         updated_count,
                         skipped_count,
                         failed_count,
-                        pending_index = pending_index_photo_ids.len(),
+                        pending_index_new = pending_index_new_photo_ids.len(),
+                        pending_index_updated = pending_index_updated_photo_ids.len(),
                         hash_batch_size,
                         hash_parallelism = effective_hash_parallelism,
                         last_hash_batch_elapsed_ms = hash_batch_elapsed_ms,
@@ -3763,21 +3770,36 @@ async fn run_scan_job(
                 }
 
                 if should_sync_index {
-                    if !pending_index_photo_ids.is_empty() {
-                        let ids = pending_index_photo_ids.iter().cloned().collect::<Vec<_>>();
-                        if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
-                            warn!(job_id, source_id = source.id, error = %e, "failed to refresh incremental photo search index");
+                    if !pending_index_new_photo_ids.is_empty() {
+                        let ids = pending_index_new_photo_ids.iter().cloned().collect::<Vec<_>>();
+                        if let Err(e) = insert_photo_search_index_for_photo_ids(&pool, &ids).await {
+                            warn!(job_id, source_id = source.id, error = %e, "failed to insert incremental photo search index for new photos");
                         } else {
-                            pending_index_photo_ids.clear();
+                            pending_index_new_photo_ids.clear();
+                        }
+                    }
+                    if !pending_index_updated_photo_ids.is_empty() {
+                        let ids = pending_index_updated_photo_ids.iter().cloned().collect::<Vec<_>>();
+                        if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
+                            warn!(job_id, source_id = source.id, error = %e, "failed to refresh incremental photo search index for updated photos");
+                        } else {
+                            pending_index_updated_photo_ids.clear();
                         }
                     }
                 }
             }
 
-            if !pending_index_photo_ids.is_empty() {
-                let ids = pending_index_photo_ids.into_iter().collect::<Vec<_>>();
+            if !pending_index_new_photo_ids.is_empty() {
+                let ids = pending_index_new_photo_ids.into_iter().collect::<Vec<_>>();
+                if let Err(e) = insert_photo_search_index_for_photo_ids(&pool, &ids).await {
+                    warn!(job_id, source_id = source.id, error = %e, "failed to insert photo search index for remaining new photos");
+                }
+            }
+
+            if !pending_index_updated_photo_ids.is_empty() {
+                let ids = pending_index_updated_photo_ids.into_iter().collect::<Vec<_>>();
                 if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
-                    warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining photos");
+                    warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining updated photos");
                 }
             }
 
@@ -4973,6 +4995,16 @@ async fn rebuild_photo_search_index_for_photo_ids(
     Ok(())
 }
 
+async fn insert_photo_search_index_for_photo_ids(
+    pool: &SqlitePool,
+    photo_ids: &[String],
+) -> Result<(), String> {
+    for photo_id in photo_ids {
+        insert_photo_search_index_for_photo(pool, photo_id).await?;
+    }
+    Ok(())
+}
+
 async fn rebuild_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
     let row = sqlx::query(
         "SELECT p.id,
@@ -5011,6 +5043,52 @@ async fn rebuild_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str)
     );
 
     remove_photo_search_index_for_photo(pool, photo_id).await?;
+    sqlx::query("INSERT INTO photo_search_fts (photo_id, search_text) VALUES (?, ?)")
+        .bind(photo_id)
+        .bind(search_text)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("failed to insert photo_search_fts row (photo_id={}): {}", photo_id, e))?;
+
+    Ok(())
+}
+
+async fn insert_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
+    let row = sqlx::query(
+        "SELECT p.id,
+                IFNULL(p.file_name, '') AS file_name,
+                IFNULL(p.file_path, '') AS file_path,
+                IFNULL(p.remark, '') AS remark,
+                IFNULL(p.exif_json, '') AS exif_json,
+                IFNULL(p.sort_time, '') AS sort_time,
+                IFNULL(GROUP_CONCAT(a.name, ' '), '') AS album_names
+         FROM photos p
+         LEFT JOIN photo_albums pa ON pa.photo_id = p.id
+         LEFT JOIN albums a ON a.id = pa.album_id
+         WHERE p.id = ? AND p.deleted_at IS NULL
+         GROUP BY p.id",
+    )
+    .bind(photo_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("failed to fetch photo for search index insert (photo_id={}): {}", photo_id, e))?;
+
+    let Some(row) = row else {
+        return Ok(());
+    };
+
+    let file_name: String = row.get("file_name");
+    let file_path: String = row.get("file_path");
+    let remark: String = row.get("remark");
+    let exif_json: String = row.get("exif_json");
+    let sort_time: String = row.get("sort_time");
+    let album_names: String = row.get("album_names");
+
+    let search_text = format!(
+        "{} {} {} {} {} {}",
+        file_name, file_path, remark, exif_json, album_names, sort_time
+    );
+
     sqlx::query("INSERT INTO photo_search_fts (photo_id, search_text) VALUES (?, ?)")
         .bind(photo_id)
         .bind(search_text)
