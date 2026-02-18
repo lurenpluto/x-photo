@@ -3101,6 +3101,7 @@ async fn run_scan_job(
 
     let source_root = source.root_path.clone();
     let resume_cursor_for_collect = resume_cursor_path.clone();
+    let collect_phase_started_at = Instant::now();
     let collect_result = tokio::task::spawn_blocking(move || {
         let adapter = LocalFsAdapter::new(false);
         let mut entries = adapter.list_entries(&source_root).map_err(|e| {
@@ -3177,6 +3178,15 @@ async fn run_scan_job(
 
     match collect_result {
         Ok(result) => {
+            info!(
+                job_id,
+                source_id = source.id,
+                collected_entries = result.entries.len(),
+                collect_failed_count = result.failed_count,
+                elapsed_ms = collect_phase_started_at.elapsed().as_millis(),
+                "scan collect phase completed"
+            );
+
             let hash_pool = rayon::ThreadPoolBuilder::new()
                 .num_threads(effective_hash_parallelism)
                 .build()
@@ -3204,6 +3214,9 @@ async fn run_scan_job(
             let mut last_scanned_modified_at: Option<String> = None;
             let mut last_scanned_content_hash: Option<String> = None;
             let mut collect_processed: i64 = 0;
+            let mut last_diag_log_at = Instant::now() - Duration::from_secs(60);
+            let scan_started_at = Instant::now();
+            let preload_started_at = Instant::now();
 
             update_scan_running_progress(
                 &pool,
@@ -3241,6 +3254,13 @@ async fn run_scan_job(
                     },
                 );
             }
+            info!(
+                job_id,
+                source_id = source.id,
+                existing_count = existing_by_storage.len(),
+                elapsed_ms = preload_started_at.elapsed().as_millis(),
+                "scan existing photo metadata preload completed"
+            );
 
             for batch in result.entries.chunks(hash_batch_size) {
                 if is_cancel_requested(&pool, &job_id).await? {
@@ -3321,6 +3341,7 @@ async fn run_scan_job(
                 }
 
                 let hash_pool_for_batch = hash_pool.clone();
+                let hash_batch_started_at = Instant::now();
                 let batch_results = tokio::task::spawn_blocking(move || {
                     hash_pool_for_batch.install(|| {
                         batch_inputs
@@ -3345,6 +3366,7 @@ async fn run_scan_job(
                         job_id, source.id, e
                     )
                 })?;
+                let hash_batch_elapsed_ms = hash_batch_started_at.elapsed().as_millis();
 
                 for outcome in batch_results {
                     let (entry, maybe_candidate, existing_meta, candidate_error) = match outcome {
@@ -3533,6 +3555,32 @@ async fn run_scan_job(
                     .await?;
                 }
 
+                if last_diag_log_at.elapsed() >= Duration::from_secs(10) {
+                    let elapsed_secs = scan_started_at.elapsed().as_secs_f64();
+                    let throughput = if elapsed_secs > 0.0 {
+                        (collect_processed as f64 / elapsed_secs * 10.0).round() / 10.0
+                    } else {
+                        0.0
+                    };
+                    info!(
+                        job_id,
+                        source_id = source.id,
+                        processed = collect_processed,
+                        total = collect_target_count,
+                        new_count,
+                        updated_count,
+                        skipped_count,
+                        failed_count,
+                        pending_index = pending_index_photo_ids.len(),
+                        hash_batch_size,
+                        hash_parallelism = effective_hash_parallelism,
+                        last_hash_batch_elapsed_ms = hash_batch_elapsed_ms,
+                        throughput_per_sec = throughput,
+                        "scan progress heartbeat"
+                    );
+                    last_diag_log_at = Instant::now();
+                }
+
                 if should_sync_index {
                     if !pending_index_photo_ids.is_empty() {
                         let ids = pending_index_photo_ids.iter().cloned().collect::<Vec<_>>();
@@ -3641,6 +3689,7 @@ async fn run_scan_job(
                 source_id = source.id,
                 from = "running",
                 to = "success",
+                elapsed_ms = scan_started_at.elapsed().as_millis(),
                 total_count,
                 new_count,
                 updated_count,
