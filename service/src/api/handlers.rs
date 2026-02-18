@@ -3768,12 +3768,20 @@ fn get_or_build_preview_jpeg_blocking(
         modified
     );
     let key = sha256_hex(&key_raw);
-    let cached = cache_dir.join(format!("{}.jpg", key));
+    let cached = build_bucketed_cache_file_path(&cache_dir, &key, "jpg");
+    if let Some(parent) = cached.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create preview bucket dir {}: {}", parent.display(), e))?;
+    }
     if cached.exists() {
         return Ok(cached);
     }
 
-    let tmp = cache_dir.join(format!("{}.tmp.jpg", key));
+    let tmp = build_bucketed_cache_file_path(&cache_dir, &format!("{}.tmp", key), "jpg");
+    if let Some(parent) = tmp.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create preview temp bucket dir {}: {}", parent.display(), e))?;
+    }
     if tmp.exists() {
         let _ = fs::remove_file(&tmp);
     }
@@ -3818,12 +3826,20 @@ fn get_or_build_thumbnail_jpeg_blocking(
         max_edge
     );
     let key = sha256_hex(&key_raw);
-    let cached = cache_dir.join(format!("{}.jpg", key));
+    let cached = build_bucketed_cache_file_path(&cache_dir, &key, "jpg");
+    if let Some(parent) = cached.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create thumbnail bucket dir {}: {}", parent.display(), e))?;
+    }
     if cached.exists() {
         return Ok(cached);
     }
 
-    let tmp = cache_dir.join(format!("{}.tmp.jpg", key));
+    let tmp = build_bucketed_cache_file_path(&cache_dir, &format!("{}.tmp", key), "jpg");
+    if let Some(parent) = tmp.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create thumbnail temp bucket dir {}: {}", parent.display(), e))?;
+    }
     if tmp.exists() {
         let _ = fs::remove_file(&tmp);
     }
@@ -4085,35 +4101,44 @@ fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheC
 
     let ttl_secs = cache_config.ttl_seconds();
     let mut files = Vec::<(PathBuf, u64, u64)>::new();
-    for entry in fs::read_dir(cache_dir)
-        .map_err(|e| format!("failed to read preview cache dir {}: {}", cache_dir.display(), e))?
-    {
-        let entry = match entry {
+    let mut stack = vec![cache_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let read_dir = match fs::read_dir(&dir) {
             Ok(v) => v,
             Err(_) => continue,
         };
-        let path = entry.path();
-        if path.extension().and_then(|v| v.to_str()) != Some("jpg") {
-            continue;
-        }
-        let meta = match entry.metadata() {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        for entry in read_dir {
+            let entry = match entry {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let meta = match entry.metadata() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if meta.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|v| v.to_str()) != Some("jpg") {
+                continue;
+            }
         let modified = meta
             .modified()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_secs())
             .unwrap_or(now_secs);
-        let size = meta.len();
+            let size = meta.len();
 
-        if now_secs.saturating_sub(modified) > ttl_secs {
-            let _ = fs::remove_file(&path);
-            continue;
+            if now_secs.saturating_sub(modified) > ttl_secs {
+                let _ = fs::remove_file(&path);
+                continue;
+            }
+
+            files.push((path, modified, size));
         }
-
-        files.push((path, modified, size));
     }
 
     let mut total_size: u64 = files.iter().map(|(_, _, s)| *s).sum();
@@ -4131,6 +4156,15 @@ fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheC
 
     let _ = fs::write(marker, now_secs.to_string());
     Ok(())
+}
+
+fn build_bucketed_cache_file_path(base_dir: &StdPath, key: &str, ext: &str) -> PathBuf {
+    let shard1 = key.get(0..2).unwrap_or("00");
+    let shard2 = key.get(2..4).unwrap_or("00");
+    base_dir
+        .join(shard1)
+        .join(shard2)
+        .join(format!("{}.{}", key, ext))
 }
 
 fn resolve_hash_parallelism(configured: usize) -> usize {
