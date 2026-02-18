@@ -1529,6 +1529,97 @@ pub async fn get_photo_file(
     Ok(response)
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct PhotoThumbQuery {
+    pub max_edge: Option<u32>,
+}
+
+pub async fn get_photo_thumbnail(
+    Path(photo_id): Path<String>,
+    Query(query): Query<PhotoThumbQuery>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Response<Body>, (StatusCode, Json<ApiResponse<Value>>)> {
+    let max_edge = query.max_edge.unwrap_or(512).clamp(96, 2048);
+
+    let row = sqlx::query(
+        "SELECT p.file_path, p.mime_type, s.root_path
+         FROM photos p
+         LEFT JOIN sources s ON s.id = p.source_id
+         WHERE p.id = ? AND p.deleted_at IS NULL",
+    )
+    .bind(&photo_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| internal_db_error("get_photo_thumbnail.photo", json!({"photo_id": photo_id}), err))?
+    .ok_or_else(|| bad_request("photo 不存在"))?;
+
+    let file_path: String = row.get("file_path");
+    let source_root: Option<String> = row.get("root_path");
+
+    let resolved_file = resolve_existing_photo_file(&file_path, source_root.as_deref()).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                code: 404,
+                message: "photo file not found on disk".to_string(),
+                data: json!({
+                    "photo_id": photo_id,
+                    "file_path": file_path,
+                }),
+            }),
+        )
+    })?;
+
+    let source_for_thumb = if state.config.preview_cache.enabled && is_heic_path(&resolved_file) {
+        match get_or_build_preview_jpeg(&state.config.preview_cache, &resolved_file).await {
+            Ok(preview_path) => preview_path,
+            Err(e) => {
+                warn!(photo_id, file_path, error = %e, "failed to build preview jpeg for thumb, fallback to original");
+                resolved_file.clone()
+            }
+        }
+    } else {
+        resolved_file.clone()
+    };
+
+    let thumb_path = get_or_build_thumbnail_jpeg(&state.config.preview_cache, &source_for_thumb, max_edge)
+        .await
+        .map_err(|e| {
+            internal_io_error(
+                "get_photo_thumbnail.build",
+                json!({
+                    "photo_id": photo_id,
+                    "source": source_for_thumb.to_string_lossy().to_string(),
+                    "max_edge": max_edge,
+                    "error": e,
+                }),
+                std::io::Error::other("thumbnail build failed"),
+            )
+        })?;
+
+    let bytes = tokio::fs::read(&thumb_path).await.map_err(|e| {
+        internal_io_error(
+            "get_photo_thumbnail.read",
+            json!({
+                "photo_id": photo_id,
+                "thumb_path": thumb_path.to_string_lossy().to_string(),
+            }),
+            e,
+        )
+    })?;
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
+
+    Ok(response)
+}
+
 fn resolve_photo_file_candidates(file_path: &str, source_root: Option<&str>) -> Vec<PathBuf> {
     let mut out = Vec::new();
 
@@ -3601,6 +3692,18 @@ async fn get_or_build_preview_jpeg(
         .map_err(|e| format!("preview build join failed (source={}): {}", source_path.display(), e))?
 }
 
+async fn get_or_build_thumbnail_jpeg(
+    cache_config: &PreviewCacheConfig,
+    source_path: &StdPath,
+    max_edge: u32,
+) -> Result<PathBuf, String> {
+    let cfg = cache_config.clone();
+    let src = source_path.to_path_buf();
+    tokio::task::spawn_blocking(move || get_or_build_thumbnail_jpeg_blocking(&cfg, &src, max_edge))
+        .await
+        .map_err(|e| format!("thumbnail build join failed (source={}): {}", source_path.display(), e))?
+}
+
 fn enqueue_preview_warmup_if_needed(
     cache_config: &PreviewCacheConfig,
     limiter: &Arc<Semaphore>,
@@ -3679,6 +3782,63 @@ fn get_or_build_preview_jpeg_blocking(
     fs::rename(&tmp, &cached).map_err(|e| {
         format!(
             "failed to move preview image {} -> {}: {}",
+            tmp.display(),
+            cached.display(),
+            e
+        )
+    })?;
+
+    Ok(cached)
+}
+
+fn get_or_build_thumbnail_jpeg_blocking(
+    cache_config: &PreviewCacheConfig,
+    source_path: &StdPath,
+    max_edge: u32,
+) -> Result<PathBuf, String> {
+    let cache_dir = PathBuf::from(&cache_config.dir).join("thumbs");
+    fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("failed to create thumbnail cache dir {}: {}", cache_dir.display(), e))?;
+
+    maybe_cleanup_preview_cache(&cache_dir, cache_config)?;
+
+    let source_meta = fs::metadata(source_path)
+        .map_err(|e| format!("failed to stat thumbnail source {}: {}", source_path.display(), e))?;
+    let modified = source_meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let key_raw = format!(
+        "{}|{}|{}|{}",
+        source_path.to_string_lossy(),
+        source_meta.len(),
+        modified,
+        max_edge
+    );
+    let key = sha256_hex(&key_raw);
+    let cached = cache_dir.join(format!("{}.jpg", key));
+    if cached.exists() {
+        return Ok(cached);
+    }
+
+    let tmp = cache_dir.join(format!("{}.tmp.jpg", key));
+    if tmp.exists() {
+        let _ = fs::remove_file(&tmp);
+    }
+
+    let img = image::ImageReader::open(source_path)
+        .map_err(|e| format!("failed to open thumbnail source {}: {}", source_path.display(), e))?
+        .decode()
+        .map_err(|e| format!("failed to decode thumbnail source {}: {}", source_path.display(), e))?;
+    let thumb = img.thumbnail(max_edge, max_edge);
+    thumb
+        .save_with_format(&tmp, image::ImageFormat::Jpeg)
+        .map_err(|e| format!("failed to save thumbnail {}: {}", tmp.display(), e))?;
+    fs::rename(&tmp, &cached).map_err(|e| {
+        format!(
+            "failed to move thumbnail {} -> {}: {}",
             tmp.display(),
             cached.display(),
             e

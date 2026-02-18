@@ -1006,7 +1006,7 @@ function renderPhotos(data) {
           return `
         <article class="photo-card" data-photo-id="${p.id}">
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
-            <img class="photo-thumb-img" data-photo-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/file" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
+            <img class="photo-thumb-img" data-photo-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/thumb?max_edge=560" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
             <div class="photo-thumb-fallback hidden" data-photo-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
@@ -1075,7 +1075,7 @@ function renderFavoritePhotos(data) {
         <article class="photo-card" data-favorite-photo-id="${p.id}">
           <button class="favorite-remove-btn" type="button" data-favorite-remove-id="${p.id}" title="取消收藏">取消收藏</button>
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
-            <img class="photo-thumb-img" data-favorite-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/file" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
+            <img class="photo-thumb-img" data-favorite-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/thumb?max_edge=560" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
             <div class="photo-thumb-fallback hidden" data-favorite-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
@@ -1717,7 +1717,7 @@ function renderAlbumDetailPhotos(items) {
         <article class="photo-card" data-album-photo-id="${p.id}">
           <span class="preview-fab">预览</span>
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
-            <img class="photo-thumb-img" data-album-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/file" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
+            <img class="photo-thumb-img" data-album-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/thumb?max_edge=560" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
             <div class="photo-thumb-fallback hidden" data-album-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
             <div class="photo-title">${escapeHtml(p.file_name)}</div>
           </div>
