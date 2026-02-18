@@ -39,12 +39,26 @@ pub struct LoggingConfig {
 pub struct PreviewCacheConfig {
     pub enabled: bool,
     pub dir: String,
+    pub ttl: String,
     pub ttl_hours: u64,
     #[serde(deserialize_with = "deserialize_size_bytes")]
     pub max_bytes: u64,
+    pub cleanup_interval: String,
     pub cleanup_interval_seconds: u64,
     pub warmup_on_scan: bool,
     pub warmup_concurrency: usize,
+}
+
+impl PreviewCacheConfig {
+    pub fn ttl_seconds(&self) -> u64 {
+        parse_duration_seconds(&self.ttl).unwrap_or_else(|_| self.ttl_hours.saturating_mul(3600))
+    }
+
+    pub fn cleanup_interval_seconds_effective(&self) -> u64 {
+        parse_duration_seconds(&self.cleanup_interval)
+            .unwrap_or(self.cleanup_interval_seconds)
+            .max(1)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,8 +117,10 @@ impl Default for AppConfig {
             preview_cache: PreviewCacheConfig {
                 enabled: true,
                 dir: "cache/previews".to_string(),
+                ttl: "7d".to_string(),
                 ttl_hours: 168,
                 max_bytes: 8 * 1024 * 1024 * 1024,
+                cleanup_interval: "5m".to_string(),
                 cleanup_interval_seconds: 300,
                 warmup_on_scan: true,
                 warmup_concurrency: 2,
@@ -183,8 +199,10 @@ impl Default for PreviewCacheConfig {
         Self {
             enabled: true,
             dir: "cache/previews".to_string(),
+            ttl: "7d".to_string(),
             ttl_hours: 168,
             max_bytes: 8 * 1024 * 1024 * 1024,
+            cleanup_interval: "5m".to_string(),
             cleanup_interval_seconds: 300,
             warmup_on_scan: true,
             warmup_concurrency: 2,
@@ -265,9 +283,15 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(v) = std::env::var("PREVIEW_CACHE_DIR") {
         config.preview_cache.dir = v;
     }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_TTL") {
+        if parse_duration_seconds(&v).is_ok() {
+            config.preview_cache.ttl = v;
+        }
+    }
     if let Ok(v) = std::env::var("PREVIEW_CACHE_TTL_HOURS") {
         if let Ok(n) = v.parse::<u64>() {
             config.preview_cache.ttl_hours = n;
+            config.preview_cache.ttl = format!("{}h", n);
         }
     }
     if let Ok(v) = std::env::var("PREVIEW_CACHE_MAX_BYTES") {
@@ -278,6 +302,12 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(v) = std::env::var("PREVIEW_CACHE_CLEANUP_INTERVAL_SECONDS") {
         if let Ok(n) = v.parse::<u64>() {
             config.preview_cache.cleanup_interval_seconds = n;
+            config.preview_cache.cleanup_interval = format!("{}s", n);
+        }
+    }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_CLEANUP_INTERVAL") {
+        if parse_duration_seconds(&v).is_ok() {
+            config.preview_cache.cleanup_interval = v;
         }
     }
     if let Ok(v) = std::env::var("PREVIEW_CACHE_WARMUP_ON_SCAN") {
@@ -447,6 +477,44 @@ fn parse_size_bytes(raw: &str) -> Result<u64, String> {
     Ok(bytes.round() as u64)
 }
 
+fn parse_duration_seconds(raw: &str) -> Result<u64, String> {
+    let text = raw.trim().to_ascii_lowercase();
+    if text.is_empty() {
+        return Err("empty duration value".to_string());
+    }
+
+    let split_at = text
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(text.len());
+    let (num_part, unit_part) = text.split_at(split_at);
+    if num_part.is_empty() {
+        return Err(format!("invalid duration '{}': missing number", raw));
+    }
+
+    let num = num_part
+        .parse::<f64>()
+        .map_err(|e| format!("invalid duration '{}': {}", raw, e))?;
+    let unit = unit_part.trim();
+    let mul: f64 = match unit {
+        "" | "s" | "sec" | "secs" | "second" | "seconds" => 1.0,
+        "m" | "min" | "mins" | "minute" | "minutes" => 60.0,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 3600.0,
+        "d" | "day" | "days" => 86400.0,
+        _ => {
+            return Err(format!(
+                "invalid duration unit '{}' in '{}', use s/m/h/d",
+                unit, raw
+            ))
+        }
+    };
+
+    let secs = num * mul;
+    if !secs.is_finite() || secs < 0.0 {
+        return Err(format!("invalid duration '{}': out of range", raw));
+    }
+    Ok(secs.round() as u64)
+}
+
 fn resolve_config_path() -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
     for i in 0..args.len() {
@@ -540,8 +608,10 @@ level = "info"
 [preview_cache]
 enabled = true
 dir = "cache/previews"
+ttl = "7d"
 ttl_hours = 168
 max_bytes = "8GB"
+cleanup_interval = "5m"
 cleanup_interval_seconds = 300
 warmup_on_scan = true
 warmup_concurrency = 2

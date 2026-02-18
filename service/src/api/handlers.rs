@@ -3846,13 +3846,13 @@ fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheC
 
     if let Ok(text) = fs::read_to_string(&marker) {
         if let Ok(last) = text.trim().parse::<u64>() {
-            if now_secs.saturating_sub(last) < cache_config.cleanup_interval_seconds {
+            if now_secs.saturating_sub(last) < cache_config.cleanup_interval_seconds_effective() {
                 return Ok(());
             }
         }
     }
 
-    let ttl_secs = cache_config.ttl_hours.saturating_mul(3600);
+    let ttl_secs = cache_config.ttl_seconds();
     let mut files = Vec::<(PathBuf, u64, u64)>::new();
     for entry in fs::read_dir(cache_dir)
         .map_err(|e| format!("failed to read preview cache dir {}: {}", cache_dir.display(), e))?

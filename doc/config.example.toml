@@ -19,9 +19,15 @@ level = "info"
 [preview_cache]
 enabled = true
 dir = "cache/previews"
+# 缓存生命周期，支持: 30d / 12h / 90m / 3600s
+ttl = "7d"
+# 兼容旧配置（有 ttl 时可忽略）
 ttl_hours = 168
 # 支持 bytes 或带单位字符串（B/KB/MB/GB/TB）
 max_bytes = "8GB"
+# 清理检查间隔，支持: 10m / 1h / 1d
+cleanup_interval = "5m"
+# 兼容旧配置（有 cleanup_interval 时可忽略）
 cleanup_interval_seconds = 300
 # 扫描时预热 HEIC/HEIF 预览
 warmup_on_scan = true
