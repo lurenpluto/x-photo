@@ -3781,20 +3781,91 @@ fn resolve_converter_command_candidates(tool: &str) -> Vec<PathBuf> {
 
     #[cfg(windows)]
     {
-        if let Ok(out_where) = Command::new("where").arg(tool).output() {
-            if out_where.status.success() {
-                let text = String::from_utf8_lossy(&out_where.stdout);
-                for line in text.lines() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        push_candidate(PathBuf::from(trimmed));
+        for where_exe in resolve_where_exe_candidates() {
+            if let Ok(out_where) = Command::new(&where_exe).arg(tool).output() {
+                if out_where.status.success() {
+                    let text = String::from_utf8_lossy(&out_where.stdout);
+                    for line in text.lines() {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            push_candidate(PathBuf::from(trimmed));
+                        }
                     }
                 }
             }
         }
+
+        for path in resolve_windows_program_dirs(tool) {
+            push_candidate(path);
+        }
     }
 
     push_candidate(PathBuf::from(tool));
+    out
+}
+
+#[cfg(windows)]
+fn resolve_where_exe_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::<PathBuf>::new();
+    let mut seen = HashSet::<String>::new();
+
+    let mut push = |p: PathBuf| {
+        let key = p.to_string_lossy().to_string();
+        if seen.insert(key) {
+            out.push(p);
+        }
+    };
+
+    if let Ok(win_dir) = std::env::var("WINDIR") {
+        let base = PathBuf::from(win_dir);
+        push(base.join("System32").join("where.exe"));
+        push(base.join("Sysnative").join("where.exe"));
+    }
+    push(PathBuf::from("where.exe"));
+    out
+}
+
+#[cfg(windows)]
+fn resolve_windows_program_dirs(tool: &str) -> Vec<PathBuf> {
+    let mut out = Vec::<PathBuf>::new();
+    let mut seen = HashSet::<String>::new();
+
+    let mut push = |p: PathBuf| {
+        let key = p.to_string_lossy().to_string();
+        if seen.insert(key) {
+            out.push(p);
+        }
+    };
+
+    let mut scan_base = |base: PathBuf| {
+        if !base.exists() {
+            return;
+        }
+        if let Ok(entries) = fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|v| v.to_str()) else {
+                    continue;
+                };
+                if !name.starts_with("ImageMagick") {
+                    continue;
+                }
+                push(path.join(format!("{}.exe", tool)));
+                push(path.join(tool));
+            }
+        }
+    };
+
+    if let Ok(v) = std::env::var("ProgramFiles") {
+        scan_base(PathBuf::from(v));
+    }
+    if let Ok(v) = std::env::var("ProgramFiles(x86)") {
+        scan_base(PathBuf::from(v));
+    }
+
     out
 }
 
