@@ -481,6 +481,13 @@ textarea {
   overflow: hidden;
 }
 
+.album-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .album-name {
   margin: 0;
   font-size: 0.98rem;
@@ -629,6 +636,31 @@ textarea {
 .photo-card:hover .preview-fab {
   opacity: 1;
   transform: translateY(0);
+}
+
+.album-cover-set-btn {
+  position: absolute;
+  left: 0.55rem;
+  top: 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(216, 230, 247, 0.32);
+  background: rgba(15, 23, 34, 0.54);
+  color: #d8e6f7;
+  font-size: 0.72rem;
+  padding: 0.12rem 0.45rem;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.photo-card:hover .album-cover-set-btn {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.album-cover-set-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .favorite-remove-btn {

@@ -791,6 +791,11 @@ function renderAlbumCards(target, albums) {
         return `
       <article class="album-card" data-album-id="${a.id}">
         <div class="album-cover" style="background:${visual.background};">
+          ${
+            a.cover_photo_id
+              ? `<img class="album-cover-img" data-album-cover-id="${a.id}" src="${state.apiBase}/photos/${a.cover_photo_id}/thumb?max_edge=720" alt="${escapeHtml(title)}" loading="lazy" />`
+              : ""
+          }
         </div>
         <p class="album-name">${escapeHtml(title)}</p>
         <p class="album-count">${escapeHtml(countLabel)}</p>
@@ -806,6 +811,12 @@ function renderAlbumCards(target, albums) {
       if (albumId) {
         openAlbumDetailPage(albumId);
       }
+    });
+  });
+
+  target.querySelectorAll("[data-album-cover-id]").forEach((img) => {
+    img.addEventListener("error", () => {
+      img.classList.add("hidden");
     });
   });
 }
@@ -1769,6 +1780,7 @@ function renderAlbumDetailPhotos(items) {
           return `
         <article class="photo-card" data-album-photo-id="${p.id}">
           <span class="preview-fab">预览</span>
+          <button class="album-cover-set-btn" type="button" data-set-cover-photo-id="${p.id}" title="设为相册封面">设为封面</button>
           <div class="photo-thumb" style="height:${visual.height}px;background:${visual.background};">
             <img class="photo-thumb-img" data-album-thumb-id="${p.id}" src="${state.apiBase}/photos/${p.id}/thumb?max_edge=560" alt="${escapeHtml(p.file_name || "照片")}" loading="lazy" />
             <div class="photo-thumb-fallback hidden" data-album-thumb-fallback-id="${p.id}">${escapeHtml((p.file_ext || "img").toUpperCase())}</div>
@@ -1794,6 +1806,29 @@ function renderAlbumDetailPhotos(items) {
       const photoId = node.getAttribute("data-album-photo-id");
       if (photoId) {
         openPhotoDetailPage(photoId);
+      }
+    });
+  });
+
+  el.albumDetailPhotos.querySelectorAll("[data-set-cover-photo-id]").forEach((btn) => {
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const photoId = btn.getAttribute("data-set-cover-photo-id");
+      const albumId = state.albumDetail.albumId;
+      if (!photoId || !albumId) return;
+      btn.disabled = true;
+      try {
+        await api(`/albums/${albumId}/cover`, {
+          method: "PATCH",
+          body: JSON.stringify({ cover_photo_id: photoId }),
+        });
+        showToast("已设为相册封面");
+        await loadAlbums();
+        await loadAlbumDetailMeta(albumId);
+      } catch (err) {
+        showToast(`设置封面失败: ${err.message}`, "error");
+      } finally {
+        btn.disabled = false;
       }
     });
   });
@@ -1827,6 +1862,7 @@ async function loadAlbumDetailMeta(albumId) {
   el.albumDetailMeta.innerHTML = [
     ["相册ID", album.id],
     ["相册名", album.name],
+    ["封面照片", album.cover_photo_id || "-"],
     ["创建方式", album.auto_created ? "自动" : "手动"],
     ["创建时间", formatIsoToSecond(album.created_at)],
     ["更新时间", formatIsoToSecond(album.updated_at)],

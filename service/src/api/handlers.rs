@@ -1781,14 +1781,38 @@ pub async fn create_album(
     let salt = format!("{}:{}", now, req.name.trim());
     let id = build_album_id(req.name.trim(), req.album_date.as_deref(), &salt);
     let auto_created = req.auto_created.unwrap_or(false);
+    let cover_photo_id = req.cover_photo_id.as_ref().map(|v| v.trim().to_string());
+
+    if let Some(cover) = cover_photo_id.as_deref() {
+        if cover.is_empty() {
+            return Err(bad_request("cover_photo_id 不能为空字符串"));
+        }
+        let exists: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL",
+        )
+        .bind(cover)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "create_album.check_cover_photo",
+                json!({"cover_photo_id": cover}),
+                err,
+            )
+        })?;
+        if exists.is_none() {
+            return Err(bad_request("cover_photo_id 对应照片不存在"));
+        }
+    }
 
     sqlx::query(
         "INSERT INTO albums (id, name, remark, cover_photo_id, auto_created, album_date, rule_key, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(req.name.trim())
     .bind(req.remark.as_deref())
+    .bind(cover_photo_id.as_deref())
     .bind(if auto_created { 1 } else { 0 })
     .bind(req.album_date.as_deref())
     .bind(req.rule_key.as_deref())
@@ -1807,11 +1831,24 @@ pub async fn create_album(
         )
     })?;
 
+    if let Some(cover) = cover_photo_id.as_deref() {
+        let _ = sqlx::query(
+            "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
+             VALUES (?, ?, NULL, ?)
+             ON CONFLICT(photo_id, album_id) DO NOTHING",
+        )
+        .bind(cover)
+        .bind(&id)
+        .bind(&now)
+        .execute(&state.pool)
+        .await;
+    }
+
     let item = Album {
         id,
         name: req.name.trim().to_string(),
         remark: req.remark,
-        cover_photo_id: None,
+        cover_photo_id,
         auto_created,
         album_date: req.album_date,
         rule_key: req.rule_key,
@@ -1940,6 +1977,7 @@ pub async fn batch_add_to_album(
 
     let now = Utc::now().to_rfc3339();
     let mut affected: i64 = 0;
+    let mut first_added_photo_id: Option<String> = None;
     for photo_id in &req.photo_ids {
         let result = sqlx::query(
             "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
@@ -1960,8 +1998,15 @@ pub async fn batch_add_to_album(
         })?;
         affected += result.rows_affected() as i64;
         if result.rows_affected() > 0 {
+            if first_added_photo_id.is_none() {
+                first_added_photo_id = Some(photo_id.clone());
+            }
             let _ = rebuild_photo_search_index_for_photo(&state.pool, photo_id).await;
         }
+    }
+
+    if let Some(photo_id) = first_added_photo_id.as_deref() {
+        let _ = set_album_cover_if_missing(&state.pool, req.album_id.trim(), photo_id).await;
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -2039,6 +2084,28 @@ pub async fn set_album_cover(
         return Err(bad_request("cover_photo_id 不能为空"));
     }
 
+    let linked: Option<String> = sqlx::query_scalar(
+        "SELECT pa.photo_id
+         FROM photo_albums pa
+         INNER JOIN photos p ON p.id = pa.photo_id
+         WHERE pa.album_id = ? AND pa.photo_id = ? AND p.deleted_at IS NULL
+         LIMIT 1",
+    )
+    .bind(&album_id)
+    .bind(req.cover_photo_id.trim())
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|err| {
+        internal_db_error(
+            "set_album_cover.check_link",
+            json!({"album_id": album_id, "cover_photo_id": req.cover_photo_id}),
+            err,
+        )
+    })?;
+    if linked.is_none() {
+        return Err(bad_request("封面照片必须属于该相册"));
+    }
+
     let now = Utc::now().to_rfc3339();
     let result = sqlx::query(
         "UPDATE albums
@@ -2074,6 +2141,7 @@ pub async fn album_add_photos(
 
     let now = Utc::now().to_rfc3339();
     let mut affected: i64 = 0;
+    let mut first_added_photo_id: Option<String> = None;
     for photo_id in &req.photo_ids {
         let result = sqlx::query(
             "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
@@ -2094,8 +2162,15 @@ pub async fn album_add_photos(
         })?;
         affected += result.rows_affected() as i64;
         if result.rows_affected() > 0 {
+            if first_added_photo_id.is_none() {
+                first_added_photo_id = Some(photo_id.clone());
+            }
             let _ = rebuild_photo_search_index_for_photo(&state.pool, photo_id).await;
         }
+    }
+
+    if let Some(photo_id) = first_added_photo_id.as_deref() {
+        let _ = set_album_cover_if_missing(&state.pool, &album_id, photo_id).await;
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -2131,6 +2206,10 @@ pub async fn album_remove_photos(
         if result.rows_affected() > 0 {
             let _ = rebuild_photo_search_index_for_photo(&state.pool, photo_id).await;
         }
+    }
+
+    if affected > 0 {
+        let _ = ensure_album_cover_valid(&state.pool, &album_id).await;
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult { affected })))
@@ -2183,6 +2262,106 @@ fn bad_request(message: &str) -> (StatusCode, Json<ApiResponse<Value>>) {
             data: json!({}),
         }),
     )
+}
+
+async fn set_album_cover_if_missing(
+    pool: &SqlitePool,
+    album_id: &str,
+    photo_id: &str,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE albums
+         SET cover_photo_id = ?, updated_at = ?
+         WHERE id = ? AND (cover_photo_id IS NULL OR TRIM(cover_photo_id) = '')",
+    )
+    .bind(photo_id)
+    .bind(&now)
+    .bind(album_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("failed to set album cover if missing (album_id={}): {}", album_id, e))?;
+    Ok(())
+}
+
+async fn set_random_album_cover_if_missing(pool: &SqlitePool, album_id: &str) -> Result<(), String> {
+    let random_photo_id: Option<String> = sqlx::query_scalar(
+        "SELECT pa.photo_id
+         FROM photo_albums pa
+         INNER JOIN photos p ON p.id = pa.photo_id
+         WHERE pa.album_id = ? AND p.deleted_at IS NULL
+         ORDER BY RANDOM()
+         LIMIT 1",
+    )
+    .bind(album_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("failed to pick random cover photo (album_id={}): {}", album_id, e))?;
+
+    if let Some(photo_id) = random_photo_id {
+        set_album_cover_if_missing(pool, album_id, &photo_id).await?;
+    }
+    Ok(())
+}
+
+async fn ensure_album_cover_valid(pool: &SqlitePool, album_id: &str) -> Result<(), String> {
+    let cover_photo_id: Option<String> = sqlx::query_scalar("SELECT cover_photo_id FROM albums WHERE id = ?")
+        .bind(album_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| format!("failed to query album cover (album_id={}): {}", album_id, e))?
+        .flatten();
+
+    if let Some(cover_photo_id) = cover_photo_id {
+        let linked: Option<String> = sqlx::query_scalar(
+            "SELECT pa.photo_id
+             FROM photo_albums pa
+             INNER JOIN photos p ON p.id = pa.photo_id
+             WHERE pa.album_id = ? AND pa.photo_id = ? AND p.deleted_at IS NULL
+             LIMIT 1",
+        )
+        .bind(album_id)
+        .bind(&cover_photo_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to validate album cover link (album_id={}, cover_photo_id={}): {}",
+                album_id, cover_photo_id, e
+            )
+        })?;
+        if linked.is_some() {
+            return Ok(());
+        }
+    }
+
+    let random_photo_id: Option<String> = sqlx::query_scalar(
+        "SELECT pa.photo_id
+         FROM photo_albums pa
+         INNER JOIN photos p ON p.id = pa.photo_id
+         WHERE pa.album_id = ? AND p.deleted_at IS NULL
+         ORDER BY RANDOM()
+         LIMIT 1",
+    )
+    .bind(album_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("failed to pick replacement cover photo (album_id={}): {}", album_id, e))?;
+
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE albums
+         SET cover_photo_id = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(random_photo_id.as_deref())
+    .bind(&now)
+    .bind(album_id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("failed to update fallback album cover (album_id={}): {}", album_id, e))?;
+
+    Ok(())
 }
 
 pub fn start_task_dispatcher(state: Arc<AppState>) {
@@ -3208,6 +3387,7 @@ async fn run_scan_job(
             let total_count = collect_target_count;
             let mut auto_album_link_count: i64 = 0;
             let mut album_cache: HashMap<String, String> = HashMap::new();
+            let mut touched_auto_album_ids: HashSet<String> = HashSet::new();
             let mut pending_index_photo_ids: HashSet<String> = HashSet::new();
             let mut last_scanned_path: Option<String> = None;
             let mut last_scanned_storage_file_id: Option<String> = None;
@@ -3491,9 +3671,10 @@ async fn run_scan_job(
                             )
                             .await
                             {
-                                Ok(linked) => {
-                                    if linked {
+                                Ok(album_id) => {
+                                    if let Some(album_id) = album_id {
                                         auto_album_link_count += 1;
+                                        touched_auto_album_ids.insert(album_id);
                                     }
                                 }
                                 Err(e) => {
@@ -3597,6 +3778,12 @@ async fn run_scan_job(
                 let ids = pending_index_photo_ids.into_iter().collect::<Vec<_>>();
                 if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
                     warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining photos");
+                }
+            }
+
+            for album_id in &touched_auto_album_ids {
+                if let Err(e) = set_random_album_cover_if_missing(&pool, album_id).await {
+                    warn!(job_id, source_id = source.id, album_id, error = %e, "failed to set random cover for auto album");
                 }
             }
 
@@ -4536,7 +4723,7 @@ async fn ensure_album_by_dir_rule(
     photo_id: &str,
     rule_patterns: &[AlbumRulePattern],
     cache: &mut HashMap<String, String>,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     let path = StdPath::new(file_path);
     let dir_name = match path
         .parent()
@@ -4544,12 +4731,12 @@ async fn ensure_album_by_dir_rule(
         .map(|v| v.to_string_lossy().to_string())
     {
         Some(v) => v,
-        None => return Ok(false),
+        None => return Ok(None),
     };
 
     let matched = match parse_album_from_dir_name_with_patterns(&dir_name, rule_patterns) {
         Some(v) => v,
-        None => return Ok(false),
+        None => return Ok(None),
     };
 
     let cache_key = format!(
@@ -4641,7 +4828,7 @@ async fn ensure_album_by_dir_rule(
         )
     })?;
 
-    Ok(true)
+    Ok(Some(album_id))
 }
 
 fn build_album_rule_patterns(config: &crate::config::AppConfig) -> Vec<AlbumRulePattern> {

@@ -53,6 +53,7 @@ pub struct PagedData<T> {
 pub struct CreateAlbumRequest {
     pub name: String,
     pub remark: Option<String>,
+    pub cover_photo_id: Option<String>,
     pub auto_created: Option<bool>,
     pub album_date: Option<String>,
     pub rule_key: Option<String>,
