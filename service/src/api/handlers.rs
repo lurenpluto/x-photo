@@ -3308,7 +3308,7 @@ async fn run_scan_job(
                              ) VALUES (
                                 ?, ?, ?, ?, ?, ?, ?, ?,
                                 ?, ?, ?, ?, ?, NULL, NULL,
-                                ?, NULL, NULL, NULL, NULL, ?, ?
+                                ?, ?, ?, NULL, NULL, ?, ?
                              )
                              ON CONFLICT(source_id, storage_file_id) DO UPDATE SET
                                 file_path = excluded.file_path,
@@ -3322,6 +3322,8 @@ async fn run_scan_job(
                                 modified_at_fs = excluded.modified_at_fs,
                                 sort_time = excluded.sort_time,
                                 exif_json = excluded.exif_json,
+                                gps_lat = excluded.gps_lat,
+                                gps_lng = excluded.gps_lng,
                                 deleted_at = NULL,
                                 updated_at = excluded.updated_at",
                         )
@@ -3339,6 +3341,8 @@ async fn run_scan_job(
                         .bind(candidate.modified_at_fs.as_deref())
                         .bind(&candidate.sort_time)
                         .bind(candidate.exif_json.as_deref())
+                        .bind(candidate.gps_lat)
+                        .bind(candidate.gps_lng)
                         .bind(&now)
                         .bind(&now)
                         .execute(&pool)
@@ -3636,6 +3640,8 @@ struct ScannedPhotoCandidate {
     modified_at_fs: Option<String>,
     sort_time: String,
     exif_json: Option<String>,
+    gps_lat: Option<f64>,
+    gps_lng: Option<f64>,
 }
 
 fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidate, String> {
@@ -3647,11 +3653,11 @@ fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidat
         .sha256(&entry.file_path)
         .map_err(|e| format!("failed to calculate sha256 for {}: {}", entry.file_path, e))?;
 
-    let (shot_at, exif_json) = match parse_exif_for_scan(&entry.file_path) {
+    let (shot_at, exif_json, gps_lat, gps_lng) = match parse_exif_for_scan(&entry.file_path) {
         Ok(v) => v,
         Err(e) => {
             warn!(file_path = entry.file_path, error = %e, "failed to parse exif, fallback to fs time");
-            (None, None)
+            (None, None, None, None)
         }
     };
 
@@ -3671,6 +3677,8 @@ fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidat
         modified_at_fs: entry.modified_at_fs,
         sort_time,
         exif_json,
+        gps_lat,
+        gps_lng,
     })
 }
 
@@ -4218,7 +4226,9 @@ fn mime_from_ext(ext: Option<&str>) -> Option<String> {
     }
 }
 
-fn parse_exif_for_scan(file_path: &str) -> Result<(Option<String>, Option<String>), String> {
+fn parse_exif_for_scan(
+    file_path: &str,
+) -> Result<(Option<String>, Option<String>, Option<f64>, Option<f64>), String> {
     let file = std::fs::File::open(file_path).map_err(|e| {
         format!("failed to open file for exif parse at {}: {}", file_path, e)
     })?;
@@ -4226,26 +4236,37 @@ fn parse_exif_for_scan(file_path: &str) -> Result<(Option<String>, Option<String
 
     let exif = match exif::Reader::new().read_from_container(&mut reader) {
         Ok(v) => v,
-        Err(_) => return Ok((None, None)),
+        Err(_) => {
+            if is_heic_path(StdPath::new(file_path)) {
+                return parse_exif_for_heif_path(file_path);
+            }
+            return Ok((None, None, None, None));
+        }
     };
 
+    Ok(parse_exif_payload(&exif))
+}
+
+fn parse_exif_payload(exif: &exif::Exif) -> (Option<String>, Option<String>, Option<f64>, Option<f64>) {
     let mut exif_map = serde_json::Map::new();
     let mut shot_at: Option<String> = None;
 
     for field in exif.fields() {
         let key = format!("{:?}", field.tag);
-        let value = field.display_value().with_unit(&exif).to_string();
+        let value = field.display_value().with_unit(exif).to_string();
         exif_map.insert(key, serde_json::Value::String(value));
     }
 
     let shot_raw = exif
         .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
         .or_else(|| exif.get_field(exif::Tag::DateTime, exif::In::PRIMARY))
-        .map(|f| f.display_value().with_unit(&exif).to_string());
+        .map(|f| f.display_value().with_unit(exif).to_string());
 
     if let Some(raw) = shot_raw {
         shot_at = parse_exif_datetime_to_rfc3339(&raw);
     }
+
+    let (gps_lat, gps_lng) = parse_gps_from_exif(exif);
 
     let exif_json = if exif_map.is_empty() {
         None
@@ -4253,7 +4274,91 @@ fn parse_exif_for_scan(file_path: &str) -> Result<(Option<String>, Option<String
         Some(serde_json::Value::Object(exif_map).to_string())
     };
 
-    Ok((shot_at, exif_json))
+    (shot_at, exif_json, gps_lat, gps_lng)
+}
+
+fn parse_gps_from_exif(exif: &exif::Exif) -> (Option<f64>, Option<f64>) {
+    let lat = exif
+        .get_field(exif::Tag::GPSLatitude, exif::In::PRIMARY)
+        .and_then(exif_gps_triplet_to_decimal);
+    let lat_ref = exif
+        .get_field(exif::Tag::GPSLatitudeRef, exif::In::PRIMARY)
+        .map(|f| f.display_value().with_unit(exif).to_string().to_ascii_uppercase())
+        .unwrap_or_default();
+
+    let lng = exif
+        .get_field(exif::Tag::GPSLongitude, exif::In::PRIMARY)
+        .and_then(exif_gps_triplet_to_decimal);
+    let lng_ref = exif
+        .get_field(exif::Tag::GPSLongitudeRef, exif::In::PRIMARY)
+        .map(|f| f.display_value().with_unit(exif).to_string().to_ascii_uppercase())
+        .unwrap_or_default();
+
+    let lat = lat.map(|v| if lat_ref.contains('S') { -v.abs() } else { v.abs() });
+    let lng = lng.map(|v| if lng_ref.contains('W') { -v.abs() } else { v.abs() });
+
+    (lat, lng)
+}
+
+fn exif_gps_triplet_to_decimal(field: &exif::Field) -> Option<f64> {
+    match &field.value {
+        exif::Value::Rational(values) if values.len() >= 3 => {
+            let deg = values.first()?.to_f64();
+            let min = values.get(1)?.to_f64();
+            let sec = values.get(2)?.to_f64();
+            Some(deg + min / 60.0 + sec / 3600.0)
+        }
+        exif::Value::SRational(values) if values.len() >= 3 => {
+            let deg = values.first()?.to_f64();
+            let min = values.get(1)?.to_f64();
+            let sec = values.get(2)?.to_f64();
+            Some(deg + min / 60.0 + sec / 3600.0)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "heif_native")]
+fn parse_exif_for_heif_path(
+    file_path: &str,
+) -> Result<(Option<String>, Option<String>, Option<f64>, Option<f64>), String> {
+    let ctx = libheif_rs::HeifContext::read_from_file(file_path)
+        .map_err(|e| format!("failed to open HEIF for exif at {}: {}", file_path, e))?;
+    let handle = ctx
+        .primary_image_handle()
+        .map_err(|e| format!("failed to get HEIF primary image handle at {}: {}", file_path, e))?;
+
+    let mut ids = vec![0; 16];
+    let count = handle.metadata_block_ids(&mut ids, b"Exif");
+    if count == 0 {
+        return Ok((None, None, None, None));
+    }
+
+    for id in ids.into_iter().take(count) {
+        let block = match handle.metadata(id) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let reader = exif::Reader::new();
+        if let Ok(exif) = reader.read_raw(block.clone()) {
+            return Ok(parse_exif_payload(&exif));
+        }
+        if block.len() > 4 {
+            let reader = exif::Reader::new();
+            if let Ok(exif) = reader.read_raw(block[4..].to_vec()) {
+                return Ok(parse_exif_payload(&exif));
+            }
+        }
+    }
+
+    Ok((None, None, None, None))
+}
+
+#[cfg(not(feature = "heif_native"))]
+fn parse_exif_for_heif_path(
+    _file_path: &str,
+) -> Result<(Option<String>, Option<String>, Option<f64>, Option<f64>), String> {
+    Ok((None, None, None, None))
 }
 
 fn parse_exif_datetime_to_rfc3339(value: &str) -> Option<String> {
