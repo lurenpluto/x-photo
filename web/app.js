@@ -1336,6 +1336,55 @@ function formatTaskProgress(task) {
   return `${done}/${total ?? "-"}`;
 }
 
+function parseIsoMs(value) {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function formatCompactDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "-";
+  const s = Math.round(seconds);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (d > 0) return `${d}d${h}h`;
+  if (h > 0) return `${h}h${m}m`;
+  if (m > 0) return `${m}m${sec}s`;
+  return `${sec}s`;
+}
+
+function calcTaskThroughput(task) {
+  const done = Number(task.progress_done || 0);
+  const startedMs = parseIsoMs(task.started_at);
+  if (!Number.isFinite(done) || done <= 0 || !startedMs) return null;
+  const elapsedSec = Math.max(1, (Date.now() - startedMs) / 1000);
+  return done / elapsedSec;
+}
+
+function taskThroughputText(task) {
+  const speed = calcTaskThroughput(task);
+  if (!speed) return "速度: -";
+  return `速度: ${speed.toFixed(1)} 张/秒`;
+}
+
+function taskEtaText(task) {
+  const done = Number(task.progress_done || 0);
+  const total = Number(task.progress_total || 0);
+  if (!Number.isFinite(total) || total <= 0 || done >= total) return "预计剩余: -";
+  const speed = calcTaskThroughput(task);
+  if (!speed || speed <= 0) return "预计剩余: -";
+  const remainingSec = (total - done) / speed;
+  return `预计剩余: ${formatCompactDuration(remainingSec)}`;
+}
+
+function taskElapsedText(task) {
+  const startedMs = parseIsoMs(task.started_at);
+  if (!startedMs) return "已运行: -";
+  return `已运行: ${formatCompactDuration((Date.now() - startedMs) / 1000)}`;
+}
+
 function taskStageText(task) {
   if (task.status !== "running") return "-";
   if (task.error_message) return task.error_message;
@@ -1369,6 +1418,7 @@ function renderTaskOverview(data) {
           <p class="item-sub">${task.id.slice(0, 14)}... · ${escapeHtml(formatTaskProgress(task))}</p>
           <p class="item-sub">${escapeHtml(taskSourceBrief(task))}</p>
           <p class="item-sub">${escapeHtml(taskStageText(task))}</p>
+          <p class="item-sub">${escapeHtml(taskThroughputText(task))} · ${escapeHtml(taskEtaText(task).replace("预计剩余: ", "剩余: "))}</p>
         </div>
         ${taskTag(task.status)}
       </div>
@@ -1520,6 +1570,9 @@ async function loadTaskDetail(taskId) {
       ["scan_job_id", task.scan_job_id || "-"],
       ["scan_status", scanStatus],
       ["progress", formatTaskProgress(task)],
+      ["throughput", taskThroughputText(task)],
+      ["eta", taskEtaText(task)],
+      ["elapsed", taskElapsedText(task)],
       ["stage", taskStageText(task)],
       ["error", task.status === "failed" || task.status === "cancelled" ? task.error_message || scanDetail?.error_message || "-" : "-"],
       ["started_at", task.started_at || "-"],
