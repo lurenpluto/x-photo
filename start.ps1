@@ -49,6 +49,45 @@ function Assert-ProcessAlive {
   }
 }
 
+function Resolve-MagickPath {
+  $preset = [Environment]::GetEnvironmentVariable("PREVIEW_MAGICK_PATH")
+  if (-not [string]::IsNullOrWhiteSpace($preset) -and (Test-Path $preset)) {
+    return $preset
+  }
+
+  $cmd = Get-Command magick -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -and (Test-Path $cmd.Source)) {
+    return $cmd.Source
+  }
+
+  $whereExe = Join-Path $env:WINDIR "System32\where.exe"
+  if (Test-Path $whereExe) {
+    $lines = & $whereExe magick 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      foreach ($line in $lines) {
+        $v = "$line".Trim()
+        if (-not [string]::IsNullOrWhiteSpace($v) -and (Test-Path $v)) {
+          return $v
+        }
+      }
+    }
+  }
+
+  $candidates = @(
+    "C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe",
+    "D:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe",
+    "C:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe",
+    "D:\Program Files\ImageMagick-7.1.1-Q16-HDRI\magick.exe"
+  )
+  foreach ($c in $candidates) {
+    if (Test-Path $c) {
+      return $c
+    }
+  }
+
+  return $null
+}
+
 $rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $serviceManifest = Join-Path $rootDir "service/Cargo.toml"
 $webDir = Join-Path $rootDir "web"
@@ -76,6 +115,14 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
 
 Write-Host "[x-photo] Building service..."
 & cargo build --manifest-path $serviceManifest
+
+$resolvedMagick = Resolve-MagickPath
+if ($resolvedMagick) {
+  $env:PREVIEW_MAGICK_PATH = $resolvedMagick
+  Write-Host "[x-photo] Using magick: $resolvedMagick"
+} else {
+  Write-Host "[x-photo] magick not found from current PowerShell env. You can set PREVIEW_MAGICK_PATH manually."
+}
 
 $serviceLog = Join-Path $rootDir ".service.log"
 $serviceErrLog = Join-Path $rootDir ".service.err.log"
