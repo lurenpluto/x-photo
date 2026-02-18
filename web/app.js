@@ -793,7 +793,8 @@ function renderAlbumCards(target, albums) {
         <div class="album-cover" style="background:${visual.background};">
           ${
             a.cover_photo_id
-              ? `<img class="album-cover-img" data-album-cover-id="${a.id}" src="${state.apiBase}/photos/${a.cover_photo_id}/thumb?max_edge=720" alt="${escapeHtml(title)}" loading="lazy" />`
+              ? `<img class="album-cover-img" data-album-cover-id="${a.id}" src="${state.apiBase}/photos/${a.cover_photo_id}/thumb?max_edge=720" alt="${escapeHtml(title)}" loading="lazy" />
+                 <span class="album-cover-missing hidden" data-album-cover-missing-id="${a.id}">封面缺失</span>`
               : ""
           }
         </div>
@@ -817,6 +818,12 @@ function renderAlbumCards(target, albums) {
   target.querySelectorAll("[data-album-cover-id]").forEach((img) => {
     img.addEventListener("error", () => {
       img.classList.add("hidden");
+      const albumId = img.getAttribute("data-album-cover-id");
+      if (!albumId) return;
+      const missing = target.querySelector(`[data-album-cover-missing-id="${albumId}"]`);
+      if (missing) {
+        missing.classList.remove("hidden");
+      }
     });
   });
 }
