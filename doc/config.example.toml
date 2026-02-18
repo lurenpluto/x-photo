@@ -33,7 +33,8 @@ cleanup_interval = "5m"
 # 兼容旧配置（有 cleanup_interval 时可忽略）
 cleanup_interval_seconds = 300
 # 扫描时预热 HEIC/HEIF 预览
-warmup_on_scan = true
+# 建议大目录全量扫描时关闭，避免影响扫描吞吐
+warmup_on_scan = false
 warmup_concurrency = 2
 
 [storage]

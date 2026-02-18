@@ -122,7 +122,7 @@ impl Default for AppConfig {
                 max_bytes: 8 * 1024 * 1024 * 1024,
                 cleanup_interval: "5m".to_string(),
                 cleanup_interval_seconds: 300,
-                warmup_on_scan: true,
+                warmup_on_scan: false,
                 warmup_concurrency: 2,
             },
             storage: StorageConfig {
@@ -204,7 +204,7 @@ impl Default for PreviewCacheConfig {
             max_bytes: 8 * 1024 * 1024 * 1024,
             cleanup_interval: "5m".to_string(),
             cleanup_interval_seconds: 300,
-            warmup_on_scan: true,
+            warmup_on_scan: false,
             warmup_concurrency: 2,
         }
     }
@@ -613,7 +613,7 @@ ttl_hours = 168
 max_bytes = "8GB"
 cleanup_interval = "5m"
 cleanup_interval_seconds = 300
-warmup_on_scan = true
+warmup_on_scan = false
 warmup_concurrency = 2
 
 [storage]
