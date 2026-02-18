@@ -3747,7 +3747,7 @@ fn get_or_build_preview_jpeg_blocking(
     cache_config: &PreviewCacheConfig,
     source_path: &StdPath,
 ) -> Result<PathBuf, String> {
-    let cache_dir = PathBuf::from(&cache_config.dir);
+    let cache_dir = PathBuf::from(&cache_config.dir).join("full");
     fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("failed to create preview cache dir {}: {}", cache_dir.display(), e))?;
 

@@ -18,6 +18,9 @@ level = "info"
 
 [preview_cache]
 enabled = true
+# 实际会分为：
+#   <dir>/full   (完整尺寸转换 JPEG)
+#   <dir>/thumbs (缩略图 JPEG)
 dir = "cache/previews"
 # 缓存生命周期，支持: 30d / 12h / 90m / 3600s
 ttl = "7d"
