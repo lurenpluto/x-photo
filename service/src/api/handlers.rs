@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use tokio::sync::Semaphore;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 use crate::api::types::{
@@ -2204,10 +2204,15 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
 
         let mut source_fingerprints: HashMap<String, String> = HashMap::new();
         let mut last_change_detect_at = Utc::now();
+        let mut last_daemon_heartbeat_at = Instant::now() - Duration::from_secs(60);
+        let daemon_heartbeat_interval = Duration::from_secs(10);
 
         loop {
-            if let Err(e) = update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await {
-                error!(error = %e, "failed to update task dispatcher heartbeat");
+            if last_daemon_heartbeat_at.elapsed() >= daemon_heartbeat_interval {
+                if let Err(e) = update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await {
+                    error!(error = %e, "failed to update task dispatcher heartbeat");
+                }
+                last_daemon_heartbeat_at = Instant::now();
             }
             if let Err(e) = dispatch_one_pending_scan_task(state.clone()).await {
                 error!(error = %e, "task dispatcher iteration failed");
@@ -2513,6 +2518,9 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
     let rows = sqlx::query(
         "SELECT tj.id AS task_id, tj.status AS task_status, tj.scan_job_id,
                 tj.updated_at AS task_updated_at,
+                tj.progress_done AS task_progress_done,
+                tj.progress_total AS task_progress_total,
+                tj.error_message AS task_error_message,
                 sj.status AS scan_status, sj.processed_count, sj.total_count,
                 sj.error_message, sj.finished_at
          FROM task_jobs tj
@@ -2529,6 +2537,9 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
         let task_status: String = row.get("task_status");
         let scan_job_id: Option<String> = row.get("scan_job_id");
         let task_updated_at: String = row.get("task_updated_at");
+        let task_progress_done: i64 = row.get("task_progress_done");
+        let task_progress_total: Option<i64> = row.get("task_progress_total");
+        let task_error_message: Option<String> = row.get("task_error_message");
         let scan_status: Option<String> = row.get("scan_status");
         let processed_count: Option<i64> = row.get("processed_count");
         let total_count: Option<i64> = row.get("total_count");
@@ -2594,6 +2605,19 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
         let processed_count = processed_count.unwrap_or(0);
 
         if scan_status == STATUS_PENDING || scan_status == STATUS_RUNNING {
+            let task_is_running = task_status == STATUS_RUNNING;
+            let progress_changed =
+                task_progress_done != processed_count || task_progress_total != total_count;
+            let error_changed = task_error_message.as_deref() != error_message.as_deref();
+            let heartbeat_due = DateTime::parse_from_rfc3339(&task_updated_at)
+                .ok()
+                .map(|dt| (Utc::now() - dt.with_timezone(&Utc)).num_seconds() >= 10)
+                .unwrap_or(true);
+
+            if task_is_running && !progress_changed && !error_changed && !heartbeat_due {
+                continue;
+            }
+
             let checkpoint = json!({
                 "scan_job_id": scan_job_id,
                 "scan_status": scan_status,
@@ -3192,6 +3216,32 @@ async fn run_scan_job(
             )
             .await?;
 
+            let existing_rows = sqlx::query(
+                "SELECT storage_file_id, modified_at_fs, content_hash
+                 FROM photos
+                 WHERE source_id = ? AND deleted_at IS NULL",
+            )
+            .bind(&source.id)
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to preload existing photo metadata for source {} (job_id={}): {}",
+                    source.id, job_id, e
+                )
+            })?;
+            let mut existing_by_storage = HashMap::<String, ExistingPhotoMeta>::new();
+            for row in existing_rows {
+                let storage_file_id: String = row.get("storage_file_id");
+                existing_by_storage.insert(
+                    storage_file_id,
+                    ExistingPhotoMeta {
+                        modified_at_fs: row.get("modified_at_fs"),
+                        content_hash: row.get("content_hash"),
+                    },
+                );
+            }
+
             for batch in result.entries.chunks(hash_batch_size) {
                 if is_cancel_requested(&pool, &job_id).await? {
                     let finished_at = Utc::now().to_rfc3339();
@@ -3236,17 +3286,56 @@ async fn run_scan_job(
                     return Ok(());
                 }
 
-                let batch_entries = batch.to_vec();
+                let mut batch_inputs = Vec::<(ScannedPhotoEntry, String, Option<ExistingPhotoMeta>)>::new();
+                for entry in batch {
+                    let storage_file_id = match resolve_storage_file_id(&entry.file_path) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            collect_processed += 1;
+                            last_scanned_path = Some(entry.file_path.clone());
+                            last_scanned_modified_at = entry.modified_at_fs.clone();
+                            failed_count += 1;
+                            if first_error.is_none() {
+                                first_error = Some(e.clone());
+                            }
+                            warn!(job_id, source_id = source.id, file_path = entry.file_path, error = %e, "failed to resolve storage_file_id");
+                            continue;
+                        }
+                    };
+
+                    let existing = existing_by_storage.get(&storage_file_id).cloned();
+                    if existing
+                        .as_ref()
+                        .and_then(|m| m.modified_at_fs.as_ref())
+                        == entry.modified_at_fs.as_ref()
+                    {
+                        collect_processed += 1;
+                        skipped_count += 1;
+                        last_scanned_path = Some(entry.file_path.clone());
+                        last_scanned_storage_file_id = Some(storage_file_id);
+                        last_scanned_modified_at = entry.modified_at_fs.clone();
+                        continue;
+                    }
+
+                    batch_inputs.push((entry.clone(), storage_file_id, existing));
+                }
+
                 let hash_pool_for_batch = hash_pool.clone();
                 let batch_results = tokio::task::spawn_blocking(move || {
                     hash_pool_for_batch.install(|| {
-                        batch_entries
+                        batch_inputs
                             .into_par_iter()
-                            .map(|entry| {
-                                let result = build_scan_candidate(entry.clone());
-                                (entry, result)
+                            .map(|(entry, storage_file_id, existing)| {
+                                match build_scan_candidate_with_storage_id(entry.clone(), storage_file_id) {
+                                    Ok(candidate) => BatchScanOutcome::Hashed {
+                                        entry,
+                                        candidate,
+                                        existing,
+                                    },
+                                    Err(error) => BatchScanOutcome::Failed { entry, error },
+                                }
                             })
-                            .collect::<Vec<(ScannedPhotoEntry, Result<ScannedPhotoCandidate, String>)>>()
+                            .collect::<Vec<BatchScanOutcome>>()
                     })
                 })
                 .await
@@ -3257,44 +3346,41 @@ async fn run_scan_job(
                     )
                 })?;
 
-                for (entry, candidate_result) in batch_results {
+                for outcome in batch_results {
+                    let (entry, maybe_candidate, existing_meta, candidate_error) = match outcome {
+                        BatchScanOutcome::Hashed {
+                            entry,
+                            candidate,
+                            existing,
+                        } => (entry, Some(candidate), existing, None),
+                        BatchScanOutcome::Failed { entry, error } => {
+                            (entry, None, None, Some(error))
+                        }
+                    };
+
                     collect_processed += 1;
                     last_scanned_path = Some(entry.file_path.clone());
                     last_scanned_modified_at = entry.modified_at_fs.clone();
 
-                    match candidate_result {
-                    Ok(candidate) => {
+                    if let Some(e) = candidate_error {
+                        failed_count += 1;
+                        warn!(job_id, source_id = source.id, error = %e, "photo metadata collect failed");
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                        }
+                        continue;
+                    }
+
+                    if let Some(candidate) = maybe_candidate {
                         last_scanned_storage_file_id = Some(candidate.storage_file_id.clone());
                         last_scanned_content_hash = Some(candidate.content_hash.clone());
 
-                        let existing = sqlx::query(
-                            "SELECT id, modified_at_fs, content_hash FROM photos WHERE source_id = ? AND storage_file_id = ?",
-                        )
-                        .bind(&source.id)
-                        .bind(&candidate.storage_file_id)
-                        .fetch_optional(&pool)
-                        .await
-                        .map_err(|e| {
-                            let msg = format!(
-                                "failed to check existing photo (source_id={}, storage_file_id={}, job_id={}): {}",
-                                source.id, candidate.storage_file_id, job_id, e
-                            );
-                            error!("{}", msg);
-                            msg
-                        })?;
-
-                        if let Some(row) = existing {
-                            let existing_modified_at: Option<String> = row.get("modified_at_fs");
-                            let existing_content_hash: Option<String> = row.get("content_hash");
-                            if existing_modified_at == candidate.modified_at_fs
-                                && existing_content_hash.as_deref()
-                                    == Some(candidate.content_hash.as_str())
-                            {
+                        if let Some(existing) = existing_meta {
+                            if existing.content_hash.as_deref() == Some(candidate.content_hash.as_str()) {
                                 skipped_count += 1;
                                 continue;
-                            } else {
-                                updated_count += 1;
                             }
+                            updated_count += 1;
                         } else {
                             new_count += 1;
                         }
@@ -3403,16 +3489,16 @@ async fn run_scan_job(
                                 }
                             }
 
+                            existing_by_storage.insert(
+                                candidate.storage_file_id.clone(),
+                                ExistingPhotoMeta {
+                                    modified_at_fs: candidate.modified_at_fs.clone(),
+                                    content_hash: Some(candidate.content_hash.clone()),
+                                },
+                            );
+
                             pending_index_photo_ids.insert(photo_id);
                         }
-                    }
-                    Err(e) => {
-                        failed_count += 1;
-                        warn!(job_id, source_id = source.id, error = %e, "photo metadata collect failed");
-                        if first_error.is_none() {
-                            first_error = Some(e);
-                        }
-                    }
                     }
                 }
 
@@ -3645,11 +3731,37 @@ struct ScannedPhotoCandidate {
     gps_lng: Option<f64>,
 }
 
-fn build_scan_candidate(entry: ScannedPhotoEntry) -> Result<ScannedPhotoCandidate, String> {
+#[derive(Debug, Clone)]
+struct ExistingPhotoMeta {
+    modified_at_fs: Option<String>,
+    content_hash: Option<String>,
+}
+
+#[derive(Debug)]
+enum BatchScanOutcome {
+    Hashed {
+        entry: ScannedPhotoEntry,
+        candidate: ScannedPhotoCandidate,
+        existing: Option<ExistingPhotoMeta>,
+    },
+    Failed {
+        entry: ScannedPhotoEntry,
+        error: String,
+    },
+}
+
+fn resolve_storage_file_id(file_path: &str) -> Result<String, String> {
     let adapter = LocalFsAdapter::new(false);
-    let storage_file_id = adapter
-        .canonical_id(&entry.file_path)
-        .map_err(|e| format!("failed to get canonical_id for {}: {}", entry.file_path, e))?;
+    adapter
+        .canonical_id(file_path)
+        .map_err(|e| format!("failed to get canonical_id for {}: {}", file_path, e))
+}
+
+fn build_scan_candidate_with_storage_id(
+    entry: ScannedPhotoEntry,
+    storage_file_id: String,
+) -> Result<ScannedPhotoCandidate, String> {
+    let adapter = LocalFsAdapter::new(false);
     let content_hash = adapter
         .sha256(&entry.file_path)
         .map_err(|e| format!("failed to calculate sha256 for {}: {}", entry.file_path, e))?;
