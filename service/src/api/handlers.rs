@@ -3291,6 +3291,7 @@ async fn run_scan_job(
                                     == Some(candidate.content_hash.as_str())
                             {
                                 skipped_count += 1;
+                                continue;
                             } else {
                                 updated_count += 1;
                             }
