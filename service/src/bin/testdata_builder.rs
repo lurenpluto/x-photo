@@ -4,7 +4,7 @@ use std::time::Instant;
 use std::io::Write;
 
 use chrono::{Datelike, NaiveDate, Weekday};
-use filetime::{set_file_mtime, FileTime};
+use filetime::{FileTime, set_file_mtime};
 use image::{ImageBuffer, Rgb};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let now = Instant::now();
         if generated == total
             || generated == 1
-            || generated % 100 == 0
+            || generated.is_multiple_of(100)
             || now.duration_since(last_progress_at).as_secs_f64() >= 0.8
         {
             last_progress_at = now;

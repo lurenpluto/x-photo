@@ -131,8 +131,8 @@ fn parse_by_delimiter(rule_name: &str, dir_name: &str, delim: char) -> Option<Al
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_album_from_dir_name, parse_album_from_dir_name_with_patterns, AlbumRulePattern,
-        RegexRulePattern,
+        AlbumRulePattern, RegexRulePattern, parse_album_from_dir_name,
+        parse_album_from_dir_name_with_patterns,
     };
 
     #[test]

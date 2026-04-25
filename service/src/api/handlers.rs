@@ -9,44 +9,45 @@ use std::sync::Once;
 use std::time::UNIX_EPOCH;
 
 use axum::{
+    Json,
     body::Body,
     extract::Path,
     extract::Query,
     extract::State,
-    http::{header, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode, header},
     response::Response,
-    Json,
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
 use rayon::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 use tokio::sync::Semaphore;
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep};
 use tracing::{debug, error, info, warn};
 
-use crate::api::types::{
-    AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse, BatchAddToAlbumRequest,
-    BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest, CreateSourceRequest,
-    ActiveTaskQuery, FavoritePhotoItem, FsWatchScanTriggerRequest, PagedData, PaginationQuery,
-    PhotoDetailData, PhotoSearchRequest, ScanTriggerResponse, SetAlbumCoverRequest, DaemonTaskHealthItem,
-    TaskHealthData, TaskHealthQuery, TaskJobData, TaskJobsQuery, TaskOverviewData,
-    TaskOverviewQuery, UpdateAlbumRequest, UpdatePhotoFavoriteRequest, UpdatePhotoRemarkRequest,
-};
 use crate::api::AppState;
+use crate::api::types::{
+    ActiveTaskQuery, AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse,
+    BatchAddToAlbumRequest, BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest,
+    CreateSourceRequest, DaemonTaskHealthItem, FavoritePhotoItem, FsWatchScanTriggerRequest,
+    PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest, ScanTriggerResponse,
+    SetAlbumCoverRequest, TaskHealthData, TaskHealthQuery, TaskJobData, TaskJobsQuery,
+    TaskOverviewData, TaskOverviewQuery, UpdateAlbumRequest, UpdatePhotoFavoriteRequest,
+    UpdatePhotoRemarkRequest,
+};
 use crate::config::PreviewCacheConfig;
 use crate::domain::album_rules::{
-    patterns_from_delimiters, parse_album_from_dir_name_with_patterns, AlbumRulePattern,
-    RegexRulePattern,
+    AlbumRulePattern, RegexRulePattern, parse_album_from_dir_name_with_patterns,
+    patterns_from_delimiters,
 };
-use crate::domain::models::{build_album_id, build_photo_id, Album, Photo, Source};
+use crate::domain::models::{Album, Photo, Source, build_album_id, build_photo_id};
 use crate::domain::task_consts::{
     STATUS_CANCELLED, STATUS_FAILED, STATUS_PENDING, STATUS_RUNNING, TRIGGER_FS_WATCH,
     TRIGGER_MANUAL, TRIGGER_RETRY, TRIGGER_SYSTEM,
 };
-use crate::infra::storage::local_fs::LocalFsAdapter;
 use crate::infra::storage::StorageAdapter;
+use crate::infra::storage::local_fs::LocalFsAdapter;
 
 pub async fn health() -> Json<ApiResponse<Value>> {
     info!("health check requested");
@@ -88,9 +89,7 @@ pub async fn create_source(
 
     let id = sha256_hex(&req.root_path);
     let now = Utc::now().to_rfc3339();
-    let source_type = req
-        .source_type
-        .unwrap_or_else(|| "local_fs".to_string());
+    let source_type = req.source_type.unwrap_or_else(|| "local_fs".to_string());
 
     sqlx::query(
         "INSERT INTO sources (id, name, root_path, source_type, enabled, created_at, updated_at)
@@ -214,7 +213,11 @@ pub async fn trigger_source_scan_fs_watch(
     State(state): State<Arc<AppState>>,
     Json(req): Json<FsWatchScanTriggerRequest>,
 ) -> Result<Json<ApiResponse<ScanTriggerResponse>>, (StatusCode, Json<ApiResponse<Value>>)> {
-    info!(source_id, changed_paths = req.changed_paths.len(), "trigger_source_scan_fs_watch requested");
+    info!(
+        source_id,
+        changed_paths = req.changed_paths.len(),
+        "trigger_source_scan_fs_watch requested"
+    );
 
     if req.changed_paths.is_empty() {
         return Err(bad_request("changed_paths 不能为空"));
@@ -260,7 +263,10 @@ pub async fn trigger_source_scan_fs_watch(
     })?;
 
     if let Some(job_id) = existing_job_id {
-        info!(source_id = source.id, job_id, "reuse existing fs_watch scan job");
+        info!(
+            source_id = source.id,
+            job_id, "reuse existing fs_watch scan job"
+        );
         return Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id })));
     }
 
@@ -438,7 +444,9 @@ pub async fn retry_scan_job(
         .bind(&job_id)
         .fetch_optional(&state.pool)
         .await
-        .map_err(|err| internal_db_error("retry_scan_job.fetch_job", json!({"job_id": job_id}), err))?
+        .map_err(|err| {
+            internal_db_error("retry_scan_job.fetch_job", json!({"job_id": job_id}), err)
+        })?
         .ok_or_else(|| bad_request("scan job 不存在"))?;
 
     let source_id: String = row.get("source_id");
@@ -455,7 +463,13 @@ pub async fn retry_scan_job(
     .bind(&source_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|err| internal_db_error("retry_scan_job.fetch_source", json!({"source_id": source_id}), err))?
+    .map_err(|err| {
+        internal_db_error(
+            "retry_scan_job.fetch_source",
+            json!({"source_id": source_id}),
+            err,
+        )
+    })?
     .ok_or_else(|| bad_request("source 不存在"))?;
 
     let active_count: i64 = sqlx::query_scalar(
@@ -464,7 +478,13 @@ pub async fn retry_scan_job(
     .bind(&source.id)
     .fetch_one(&state.pool)
     .await
-    .map_err(|err| internal_db_error("retry_scan_job.active_count", json!({"source_id": source.id}), err))?;
+    .map_err(|err| {
+        internal_db_error(
+            "retry_scan_job.active_count",
+            json!({"source_id": source.id}),
+            err,
+        )
+    })?;
     if active_count > 0 {
         return Err(bad_request("当前 source 已有扫描任务在执行或排队"));
     }
@@ -500,7 +520,9 @@ pub async fn retry_scan_job(
             )
         })?;
 
-    Ok(Json(ApiResponse::ok(ScanTriggerResponse { job_id: new_job_id })))
+    Ok(Json(ApiResponse::ok(ScanTriggerResponse {
+        job_id: new_job_id,
+    })))
 }
 
 pub async fn list_task_jobs(
@@ -515,7 +537,8 @@ pub async fn list_task_jobs(
 
     debug!(page, page_size, job_type = %job_type, status = %status, "list_task_jobs requested");
 
-    let mut count_builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM task_jobs tj WHERE 1=1");
+    let mut count_builder =
+        QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM task_jobs tj WHERE 1=1");
     apply_task_job_filters(&mut count_builder, &job_type, &status);
     let total: i64 = count_builder
         .build_query_scalar()
@@ -609,7 +632,10 @@ pub async fn get_task_overview(
 ) -> Result<Json<ApiResponse<TaskOverviewData>>, (StatusCode, Json<ApiResponse<Value>>)> {
     let include_all_daemon = query.include_all_daemon.unwrap_or(true);
     let stale_after_seconds = query.stale_after_seconds.unwrap_or(15).max(1);
-    debug!(include_all_daemon, stale_after_seconds, "get_task_overview requested");
+    debug!(
+        include_all_daemon,
+        stale_after_seconds, "get_task_overview requested"
+    );
 
     let active_tasks = fetch_active_tasks(&state.pool, include_all_daemon)
         .await
@@ -631,7 +657,10 @@ pub async fn get_task_overview(
             )
         })?;
 
-    Ok(Json(ApiResponse::ok(TaskOverviewData { active_tasks, health })))
+    Ok(Json(ApiResponse::ok(TaskOverviewData {
+        active_tasks,
+        health,
+    })))
 }
 
 pub async fn get_task_job(
@@ -853,7 +882,8 @@ pub async fn search_photos(
         "search_photos requested"
     );
 
-    let mut count_builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM photos p WHERE p.deleted_at IS NULL");
+    let mut count_builder =
+        QueryBuilder::<Sqlite>::new("SELECT COUNT(1) FROM photos p WHERE p.deleted_at IS NULL");
     apply_photo_search_filters(
         &mut count_builder,
         &keyword_parts,
@@ -927,7 +957,13 @@ pub async fn search_photos(
             )
         })?;
 
-    info!(total, returned = items.len(), page, page_size, "search_photos completed");
+    info!(
+        total,
+        returned = items.len(),
+        page,
+        page_size,
+        "search_photos completed"
+    );
 
     Ok(Json(ApiResponse::ok(PagedData {
         total,
@@ -1020,22 +1056,21 @@ fn apply_photo_search_filters(
         let like = format!("%{}%", term);
         builder.push(" AND (p.source_id LIKE ");
         builder.push_bind(like.clone());
-        builder.push(" OR EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.name LIKE ");
+        builder
+            .push(" OR EXISTS (SELECT 1 FROM sources s WHERE s.id = p.source_id AND s.name LIKE ");
         builder.push_bind(like);
         builder.push("))");
     }
 
     for term in &keyword.date_terms {
-        let normalized = term.replace('/', "-").replace('.', "-");
+        let normalized = term.replace(['/', '.'], "-");
         let like = format!("{}%", normalized);
         builder.push(" AND p.sort_time LIKE ");
         builder.push_bind(like);
     }
 
     if !album_id.is_empty() {
-        builder.push(
-            " AND p.id IN (SELECT pa.photo_id FROM photo_albums pa WHERE pa.album_id = ",
-        );
+        builder.push(" AND p.id IN (SELECT pa.photo_id FROM photo_albums pa WHERE pa.album_id = ");
         builder.push_bind(album_id.to_string());
         builder.push(")");
     }
@@ -1153,11 +1188,7 @@ fn parse_keyword_search(keyword: &str) -> KeywordSearchParts {
     out
 }
 
-fn apply_task_job_filters(
-    builder: &mut QueryBuilder<Sqlite>,
-    job_type: &str,
-    status: &str,
-) {
+fn apply_task_job_filters(builder: &mut QueryBuilder<Sqlite>, job_type: &str, status: &str) {
     if !job_type.is_empty() {
         builder.push(" AND tj.job_type = ");
         builder.push_bind(job_type.to_string());
@@ -1328,13 +1359,18 @@ pub async fn get_photo_detail(
         })
         .collect::<Vec<_>>();
 
-    let is_favorite: i64 = sqlx::query_scalar(
-        "SELECT COUNT(1) FROM photo_favorites WHERE photo_id = ?",
-    )
-    .bind(&photo.id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|err| internal_db_error("get_photo_detail.favorite", json!({"photo_id": photo.id}), err))?;
+    let is_favorite: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM photo_favorites WHERE photo_id = ?")
+            .bind(&photo.id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|err| {
+                internal_db_error(
+                    "get_photo_detail.favorite",
+                    json!({"photo_id": photo.id}),
+                    err,
+                )
+            })?;
 
     Ok(Json(ApiResponse::ok(PhotoDetailData {
         photo,
@@ -1346,7 +1382,8 @@ pub async fn get_photo_detail(
 pub async fn list_favorite_photos(
     Query(query): Query<PaginationQuery>,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<PagedData<FavoritePhotoItem>>>, (StatusCode, Json<ApiResponse<Value>>)> {
+) -> Result<Json<ApiResponse<PagedData<FavoritePhotoItem>>>, (StatusCode, Json<ApiResponse<Value>>)>
+{
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(100).clamp(1, 500);
     let offset = (page - 1) * page_size;
@@ -1391,13 +1428,18 @@ pub async fn update_photo_favorite(
     State(state): State<Arc<AppState>>,
     Json(req): Json<UpdatePhotoFavoriteRequest>,
 ) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
-    let photo_exists: Option<String> = sqlx::query_scalar(
-        "SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL",
-    )
-    .bind(&photo_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|err| internal_db_error("update_photo_favorite.check_photo", json!({"photo_id": photo_id}), err))?;
+    let photo_exists: Option<String> =
+        sqlx::query_scalar("SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL")
+            .bind(&photo_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|err| {
+                internal_db_error(
+                    "update_photo_favorite.check_photo",
+                    json!({"photo_id": photo_id}),
+                    err,
+                )
+            })?;
 
     if photo_exists.is_none() {
         return Err(bad_request("photo 不存在"));
@@ -1414,14 +1456,26 @@ pub async fn update_photo_favorite(
         .bind(&now)
         .execute(&state.pool)
         .await
-        .map_err(|err| internal_db_error("update_photo_favorite.insert", json!({"photo_id": photo_id}), err))?
+        .map_err(|err| {
+            internal_db_error(
+                "update_photo_favorite.insert",
+                json!({"photo_id": photo_id}),
+                err,
+            )
+        })?
         .rows_affected() as i64
     } else {
         sqlx::query("DELETE FROM photo_favorites WHERE photo_id = ?")
             .bind(&photo_id)
             .execute(&state.pool)
             .await
-            .map_err(|err| internal_db_error("update_photo_favorite.delete", json!({"photo_id": photo_id}), err))?
+            .map_err(|err| {
+                internal_db_error(
+                    "update_photo_favorite.delete",
+                    json!({"photo_id": photo_id}),
+                    err,
+                )
+            })?
             .rows_affected() as i64
     };
 
@@ -1529,9 +1583,10 @@ pub async fn get_photo_file(
 
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=60"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=60"),
+    );
     if let Ok(v) = HeaderValue::from_str(&content_type) {
         response.headers_mut().insert(header::CONTENT_TYPE, v);
     }
@@ -1569,25 +1624,32 @@ pub async fn get_photo_thumbnail(
     .bind(&photo_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|err| internal_db_error("get_photo_thumbnail.photo", json!({"photo_id": photo_id}), err))?
+    .map_err(|err| {
+        internal_db_error(
+            "get_photo_thumbnail.photo",
+            json!({"photo_id": photo_id}),
+            err,
+        )
+    })?
     .ok_or_else(|| bad_request("photo 不存在"))?;
 
     let file_path: String = row.get("file_path");
     let source_root: Option<String> = row.get("root_path");
 
-    let resolved_file = resolve_existing_photo_file(&file_path, source_root.as_deref()).ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ApiResponse {
-                code: 404,
-                message: "photo file not found on disk".to_string(),
-                data: json!({
-                    "photo_id": photo_id,
-                    "file_path": file_path,
+    let resolved_file = resolve_existing_photo_file(&file_path, source_root.as_deref())
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse {
+                    code: 404,
+                    message: "photo file not found on disk".to_string(),
+                    data: json!({
+                        "photo_id": photo_id,
+                        "file_path": file_path,
+                    }),
                 }),
-            }),
-        )
-    })?;
+            )
+        })?;
 
     let source_for_thumb = if state.config.preview_cache.enabled && is_heic_path(&resolved_file) {
         match get_or_build_preview_jpeg(&state.config.preview_cache, &resolved_file).await {
@@ -1601,20 +1663,21 @@ pub async fn get_photo_thumbnail(
         resolved_file.clone()
     };
 
-    let thumb_path = get_or_build_thumbnail_jpeg(&state.config.preview_cache, &source_for_thumb, max_edge)
-        .await
-        .map_err(|e| {
-            internal_io_error(
-                "get_photo_thumbnail.build",
-                json!({
-                    "photo_id": photo_id,
-                    "source": source_for_thumb.to_string_lossy().to_string(),
-                    "max_edge": max_edge,
-                    "error": e,
-                }),
-                std::io::Error::other("thumbnail build failed"),
-            )
-        })?;
+    let thumb_path =
+        get_or_build_thumbnail_jpeg(&state.config.preview_cache, &source_for_thumb, max_edge)
+            .await
+            .map_err(|e| {
+                internal_io_error(
+                    "get_photo_thumbnail.build",
+                    json!({
+                        "photo_id": photo_id,
+                        "source": source_for_thumb.to_string_lossy().to_string(),
+                        "max_edge": max_edge,
+                        "error": e,
+                    }),
+                    std::io::Error::other("thumbnail build failed"),
+                )
+            })?;
 
     let bytes = tokio::fs::read(&thumb_path).await.map_err(|e| {
         internal_io_error(
@@ -1629,9 +1692,10 @@ pub async fn get_photo_thumbnail(
 
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=3600"),
+    );
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
@@ -1645,11 +1709,11 @@ fn resolve_photo_file_candidates(file_path: &str, source_root: Option<&str>) -> 
     let direct = expand_tilde_path(file_path);
     out.push(direct.clone());
 
-    if direct.is_relative() {
-        if let Some(root) = source_root {
-            let root_expanded = expand_tilde_path(root);
-            out.push(root_expanded.join(&direct));
-        }
+    if direct.is_relative()
+        && let Some(root) = source_root
+    {
+        let root_expanded = expand_tilde_path(root);
+        out.push(root_expanded.join(&direct));
     }
 
     let mut dedup = HashSet::new();
@@ -1659,15 +1723,17 @@ fn resolve_photo_file_candidates(file_path: &str, source_root: Option<&str>) -> 
 
 fn expand_tilde_path(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
-    if trimmed == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
+    if trimmed == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        return home;
     }
-    if let Some(stripped) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(stripped);
-        }
+    if let Some(stripped) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(stripped);
     }
     PathBuf::from(trimmed)
 }
@@ -1718,11 +1784,7 @@ pub async fn get_album_detail(
     .fetch_one(&state.pool)
     .await
     .map_err(|err| {
-        internal_db_error(
-            "get_album_detail.count",
-            json!({"album_id": album.id}),
-            err,
-        )
+        internal_db_error("get_album_detail.count", json!({"album_id": album.id}), err)
     })?;
 
     let photos = sqlx::query_as::<_, Photo>(
@@ -1806,19 +1868,18 @@ pub async fn create_album(
         if cover.is_empty() {
             return Err(bad_request("cover_photo_id 不能为空字符串"));
         }
-        let exists: Option<String> = sqlx::query_scalar(
-            "SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL",
-        )
-        .bind(cover)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|err| {
-            internal_db_error(
-                "create_album.check_cover_photo",
-                json!({"cover_photo_id": cover}),
-                err,
-            )
-        })?;
+        let exists: Option<String> =
+            sqlx::query_scalar("SELECT id FROM photos WHERE id = ? AND deleted_at IS NULL")
+                .bind(cover)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|err| {
+                    internal_db_error(
+                        "create_album.check_cover_photo",
+                        json!({"cover_photo_id": cover}),
+                        err,
+                    )
+                })?;
         if exists.is_none() {
             return Err(bad_request("cover_photo_id 对应照片不存在"));
         }
@@ -2048,11 +2109,7 @@ pub async fn update_album(
             .fetch_optional(&state.pool)
             .await
             .map_err(|err| {
-                internal_db_error(
-                    "update_album.get_name",
-                    json!({"album_id": album_id}),
-                    err,
-                )
+                internal_db_error("update_album.get_name", json!({"album_id": album_id}), err)
             })?;
         if current_name.is_none() {
             return Err(bad_request("album 不存在"));
@@ -2075,18 +2132,12 @@ pub async fn update_album(
     .bind(&album_id)
     .execute(&state.pool)
     .await
-    .map_err(|err| {
-        internal_db_error(
-            "update_album.update",
-            json!({"album_id": album_id}),
-            err,
-        )
-    })?;
+    .map_err(|err| internal_db_error("update_album.update", json!({"album_id": album_id}), err))?;
 
-    if result.rows_affected() > 0 {
-        if let Ok(photo_ids) = fetch_photo_ids_by_album(&state.pool, &album_id).await {
-            let _ = rebuild_photo_search_index_for_photo_ids(&state.pool, &photo_ids).await;
-        }
+    if result.rows_affected() > 0
+        && let Ok(photo_ids) = fetch_photo_ids_by_album(&state.pool, &album_id).await
+    {
+        let _ = rebuild_photo_search_index_for_photo_ids(&state.pool, &photo_ids).await;
     }
 
     Ok(Json(ApiResponse::ok(BatchOperationResult {
@@ -2299,11 +2350,19 @@ async fn set_album_cover_if_missing(
     .bind(album_id)
     .execute(pool)
     .await
-    .map_err(|e| format!("failed to set album cover if missing (album_id={}): {}", album_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to set album cover if missing (album_id={}): {}",
+            album_id, e
+        )
+    })?;
     Ok(())
 }
 
-async fn set_random_album_cover_if_missing(pool: &SqlitePool, album_id: &str) -> Result<(), String> {
+async fn set_random_album_cover_if_missing(
+    pool: &SqlitePool,
+    album_id: &str,
+) -> Result<(), String> {
     let random_photo_id: Option<String> = sqlx::query_scalar(
         "SELECT pa.photo_id
          FROM photo_albums pa
@@ -2315,7 +2374,12 @@ async fn set_random_album_cover_if_missing(pool: &SqlitePool, album_id: &str) ->
     .bind(album_id)
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("failed to pick random cover photo (album_id={}): {}", album_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to pick random cover photo (album_id={}): {}",
+            album_id, e
+        )
+    })?;
 
     if let Some(photo_id) = random_photo_id {
         set_album_cover_if_missing(pool, album_id, &photo_id).await?;
@@ -2324,12 +2388,13 @@ async fn set_random_album_cover_if_missing(pool: &SqlitePool, album_id: &str) ->
 }
 
 async fn ensure_album_cover_valid(pool: &SqlitePool, album_id: &str) -> Result<(), String> {
-    let cover_photo_id: Option<String> = sqlx::query_scalar("SELECT cover_photo_id FROM albums WHERE id = ?")
-        .bind(album_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("failed to query album cover (album_id={}): {}", album_id, e))?
-        .flatten();
+    let cover_photo_id: Option<String> =
+        sqlx::query_scalar("SELECT cover_photo_id FROM albums WHERE id = ?")
+            .bind(album_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("failed to query album cover (album_id={}): {}", album_id, e))?
+            .flatten();
 
     if let Some(cover_photo_id) = cover_photo_id {
         let linked: Option<String> = sqlx::query_scalar(
@@ -2365,7 +2430,12 @@ async fn ensure_album_cover_valid(pool: &SqlitePool, album_id: &str) -> Result<(
     .bind(album_id)
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("failed to pick replacement cover photo (album_id={}): {}", album_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to pick replacement cover photo (album_id={}): {}",
+            album_id, e
+        )
+    })?;
 
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -2378,7 +2448,12 @@ async fn ensure_album_cover_valid(pool: &SqlitePool, album_id: &str) -> Result<(
     .bind(album_id)
     .execute(pool)
     .await
-    .map_err(|e| format!("failed to update fallback album cover (album_id={}): {}", album_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to update fallback album cover (album_id={}): {}",
+            album_id, e
+        )
+    })?;
 
     Ok(())
 }
@@ -2388,7 +2463,9 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
     let change_detect_enabled = state.config.scan.source_change_detect_enabled;
     let change_detect_interval_ms = state.config.scan.source_change_detect_interval_ms.max(2000);
     tokio::spawn(async move {
-        if let Err(e) = ensure_daemon_task_row(state.clone(), "daemon:task_dispatcher", "task_dispatcher").await {
+        if let Err(e) =
+            ensure_daemon_task_row(state.clone(), "daemon:task_dispatcher", "task_dispatcher").await
+        {
             error!(error = %e, "failed to ensure task dispatcher daemon row");
         }
 
@@ -2407,7 +2484,9 @@ pub fn start_task_dispatcher(state: Arc<AppState>) {
 
         loop {
             if last_daemon_heartbeat_at.elapsed() >= daemon_heartbeat_interval {
-                if let Err(e) = update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await {
+                if let Err(e) =
+                    update_daemon_heartbeat(state.clone(), "daemon:task_dispatcher").await
+                {
                     error!(error = %e, "failed to update task dispatcher heartbeat");
                 }
                 last_daemon_heartbeat_at = Instant::now();
@@ -2462,7 +2541,12 @@ async fn bootstrap_failed_sources_for_retry(state: Arc<AppState>) -> Result<(), 
     )
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| format!("failed to load active scan sources for startup bootstrap: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "failed to load active scan sources for startup bootstrap: {}",
+            e
+        )
+    })?;
 
     let mut blocked_source_ids = active_scan_sources.into_iter().collect::<HashSet<_>>();
 
@@ -2473,7 +2557,12 @@ async fn bootstrap_failed_sources_for_retry(state: Arc<AppState>) -> Result<(), 
     )
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| format!("failed to load active scan tasks for startup bootstrap: {}", e))?;
+    .map_err(|e| {
+        format!(
+            "failed to load active scan tasks for startup bootstrap: {}",
+            e
+        )
+    })?;
 
     for row in active_task_rows {
         let payload_json: Option<String> = row.get("payload_json");
@@ -2500,17 +2589,27 @@ async fn bootstrap_failed_sources_for_retry(state: Arc<AppState>) -> Result<(), 
         .await?;
 
         scheduled += 1;
-        info!(task_job_id, source_id, "startup bootstrap scheduled retry scan task for failed source");
+        info!(
+            task_job_id,
+            source_id, "startup bootstrap scheduled retry scan task for failed source"
+        );
     }
 
-    info!(scheduled, "startup bootstrap completed for failed source scan retries");
+    info!(
+        scheduled,
+        "startup bootstrap completed for failed source scan retries"
+    );
     Ok(())
 }
 
 fn extract_source_id_from_payload(payload_json: Option<&str>) -> Option<String> {
     payload_json
         .and_then(|v| serde_json::from_str::<Value>(v).ok())
-        .and_then(|v| v.get("source_id").and_then(|s| s.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("source_id")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        })
 }
 
 async fn detect_source_changes_and_schedule_incremental_scans(
@@ -2564,10 +2663,15 @@ async fn detect_source_changes_and_schedule_incremental_scans(
         );
         if let Some(prev) = source_fingerprints.get(&source.id) {
             if prev != &fingerprint {
-                schedule_incremental_fs_watch_scan(state.clone(), &source, prev, &fingerprint).await?;
+                schedule_incremental_fs_watch_scan(state.clone(), &source, prev, &fingerprint)
+                    .await?;
             }
         } else {
-            info!(source_id = source.id, root_path = source.root_path, "source change detect baseline initialized");
+            info!(
+                source_id = source.id,
+                root_path = source.root_path,
+                "source change detect baseline initialized"
+            );
         }
 
         source_fingerprints.insert(source.id.clone(), fingerprint);
@@ -2588,12 +2692,12 @@ fn build_source_fingerprint(entries: &[crate::infra::storage::StorageEntry]) -> 
         }
         file_count += 1;
         total_size = total_size.saturating_add(entry.size);
-        if let Some(modified) = entry.modified_at {
-            if let Ok(since_epoch) = modified.duration_since(UNIX_EPOCH) {
-                let millis = since_epoch.as_millis() as i128;
-                if millis > max_modified_millis {
-                    max_modified_millis = millis;
-                }
+        if let Some(modified) = entry.modified_at
+            && let Ok(since_epoch) = modified.duration_since(UNIX_EPOCH)
+        {
+            let millis = since_epoch.as_millis() as i128;
+            if millis > max_modified_millis {
+                max_modified_millis = millis;
             }
         }
     }
@@ -2618,7 +2722,12 @@ async fn schedule_incremental_fs_watch_scan(
     .bind(&source.id)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| format!("failed to check active scans for source {}: {}", source.id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to check active scans for source {}: {}",
+            source.id, e
+        )
+    })?;
 
     if active_scan_count > 0 {
         info!(
@@ -2638,7 +2747,8 @@ async fn schedule_incremental_fs_watch_scan(
         },
     });
 
-    let task_job_id = create_scan_task_job(state.clone(), &source.id, TRIGGER_FS_WATCH, payload).await?;
+    let task_job_id =
+        create_scan_task_job(state.clone(), &source.id, TRIGGER_FS_WATCH, payload).await?;
     let job_id = execute_scan_task_job(state.clone(), &task_job_id).await?;
     info!(
         source_id = source.id,
@@ -2709,7 +2819,12 @@ async fn update_daemon_heartbeat(state: Arc<AppState>, daemon_id: &str) -> Resul
     .bind(daemon_id)
     .execute(&state.pool)
     .await
-    .map_err(|e| format!("failed to update daemon heartbeat (id={}): {}", daemon_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to update daemon heartbeat (id={}): {}",
+            daemon_id, e
+        )
+    })?;
     Ok(())
 }
 
@@ -2792,7 +2907,12 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
                     .bind(STATUS_RUNNING)
                     .execute(&state.pool)
                     .await
-                    .map_err(|e| format!("failed to fail stale task without scan link (task_id={}): {}", task_id, e))?;
+                    .map_err(|e| {
+                        format!(
+                            "failed to fail stale task without scan link (task_id={}): {}",
+                            task_id, e
+                        )
+                    })?;
                 }
             }
             continue;
@@ -2816,7 +2936,12 @@ async fn reconcile_scan_task_statuses(state: Arc<AppState>) -> Result<(), String
                 .bind(STATUS_RUNNING)
                 .execute(&state.pool)
                 .await
-                .map_err(|e| format!("failed to fail task with missing scan row (task_id={}): {}", task_id, e))?;
+                .map_err(|e| {
+                    format!(
+                        "failed to fail task with missing scan row (task_id={}): {}",
+                        task_id, e
+                    )
+                })?;
                 continue;
             }
         };
@@ -2961,23 +3086,26 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
             return Ok(scan_job_id);
         }
 
-        let checkpoint_json: Option<String> = sqlx::query_scalar(
-            "SELECT checkpoint_json FROM task_jobs WHERE id = ?",
-        )
-        .bind(task_job_id)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| format!("failed to get checkpoint for task {}: {}", task_job_id, e))?
-        .flatten();
+        let checkpoint_json: Option<String> =
+            sqlx::query_scalar("SELECT checkpoint_json FROM task_jobs WHERE id = ?")
+                .bind(task_job_id)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| format!("failed to get checkpoint for task {}: {}", task_job_id, e))?
+                .flatten();
 
         if let Some(checkpoint_json) = checkpoint_json {
-            let parsed: Value = serde_json::from_str(&checkpoint_json).unwrap_or_else(|_| json!({}));
+            let parsed: Value =
+                serde_json::from_str(&checkpoint_json).unwrap_or_else(|_| json!({}));
             if let Some(scan_job_id) = parsed.get("scan_job_id").and_then(|v| v.as_str()) {
                 return Ok(scan_job_id.to_string());
             }
         }
 
-        return Err(format!("task {} is not pending, status={}", task_job_id, status));
+        return Err(format!(
+            "task {} is not pending, status={}",
+            task_job_id, status
+        ));
     }
 
     let now = Utc::now().to_rfc3339();
@@ -3006,7 +3134,10 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
             .map_err(|e| format!("failed to re-fetch task {} after race: {}", task_job_id, e))?;
 
             let Some(latest) = latest else {
-                return Err(format!("task {} disappeared during execution race", task_job_id));
+                return Err(format!(
+                    "task {} disappeared during execution race",
+                    task_job_id
+                ));
             };
 
             let latest_status: String = latest.get("status");
@@ -3017,7 +3148,8 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
 
             let checkpoint_json: Option<String> = latest.get("checkpoint_json");
             if let Some(checkpoint_json) = checkpoint_json {
-                let parsed: Value = serde_json::from_str(&checkpoint_json).unwrap_or_else(|_| json!({}));
+                let parsed: Value =
+                    serde_json::from_str(&checkpoint_json).unwrap_or_else(|_| json!({}));
                 if let Some(scan_job_id) = parsed.get("scan_job_id").and_then(|v| v.as_str()) {
                     return Ok(scan_job_id.to_string());
                 }
@@ -3033,7 +3165,10 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
             sleep(Duration::from_millis(25)).await;
         }
 
-        return Err(format!("task {} status changed by other worker", task_job_id));
+        return Err(format!(
+            "task {} status changed by other worker",
+            task_job_id
+        ));
     }
 
     let trigger_type: String = task_row.get("trigger_type");
@@ -3055,7 +3190,12 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
     .bind(source_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| format!("failed to load source {} for task {}: {}", source_id, task_job_id, e))?
+    .map_err(|e| {
+        format!(
+            "failed to load source {} for task {}: {}",
+            source_id, task_job_id, e
+        )
+    })?
     .ok_or_else(|| format!("source not found for task {}: {}", task_job_id, source_id))?;
 
     let scan_job_id = match enqueue_scan_job(state.clone(), source, &trigger_type).await {
@@ -3094,7 +3234,12 @@ async fn execute_scan_task_job(state: Arc<AppState>, task_job_id: &str) -> Resul
     .bind(task_job_id)
     .execute(&state.pool)
     .await
-    .map_err(|e| format!("failed to mark task {} running after enqueue: {}", task_job_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to mark task {} running after enqueue: {}",
+            task_job_id, e
+        )
+    })?;
 
     Ok(scan_job_id)
 }
@@ -3123,7 +3268,14 @@ async fn enqueue_scan_job(
         )
     })?;
 
-    info!(job_id, source_id = source.id, trigger_type, from = "none", to = "pending", "scan job status transition");
+    info!(
+        job_id,
+        source_id = source.id,
+        trigger_type,
+        from = "none",
+        to = "pending",
+        "scan job status transition"
+    );
 
     let pool_for_task = state.pool.clone();
     let limiter = state.scan_limiter.clone();
@@ -3144,14 +3296,17 @@ async fn enqueue_scan_job(
     tokio::spawn(async move {
         let permit = limiter.acquire_owned().await;
         if permit.is_err() {
-            error!(job_id = job_id_for_task, "failed to acquire scan limiter permit");
+            error!(
+                job_id = job_id_for_task,
+                "failed to acquire scan limiter permit"
+            );
             return;
         }
         let _permit_guard = permit.ok();
 
-        if let Err(e) = run_scan_job(
-            pool_for_task,
-            job_id_for_task.clone(),
+        let scan_options = ScanRunOptions {
+            pool: pool_for_task,
+            job_id: job_id_for_task.clone(),
             source,
             album_rule_patterns,
             checkpoint_every,
@@ -3161,9 +3316,9 @@ async fn enqueue_scan_job(
             preview_cache,
             preview_warmup_limiter,
             resume_enabled,
-        )
-        .await
-        {
+        };
+
+        if let Err(e) = run_scan_job(scan_options).await {
             error!(job_id = job_id_for_task, error = %e, "scan job execution failed at task level");
         }
     });
@@ -3172,11 +3327,12 @@ async fn enqueue_scan_job(
 }
 
 async fn is_cancel_requested(pool: &SqlitePool, job_id: &str) -> Result<bool, String> {
-    let flag: Option<i64> = sqlx::query_scalar("SELECT cancel_requested FROM scan_jobs WHERE id = ?")
-        .bind(job_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| format!("failed to check cancel flag for job {}: {}", job_id, e))?;
+    let flag: Option<i64> =
+        sqlx::query_scalar("SELECT cancel_requested FROM scan_jobs WHERE id = ?")
+            .bind(job_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| format!("failed to check cancel flag for job {}: {}", job_id, e))?;
     Ok(flag.unwrap_or(0) == 1)
 }
 
@@ -3292,7 +3448,7 @@ async fn update_scan_running_progress(
     Ok(())
 }
 
-async fn run_scan_job(
+struct ScanRunOptions {
     pool: SqlitePool,
     job_id: String,
     source: Source,
@@ -3304,14 +3460,36 @@ async fn run_scan_job(
     preview_cache: PreviewCacheConfig,
     preview_warmup_limiter: Arc<Semaphore>,
     resume_enabled: bool,
-) -> Result<(), String> {
+}
+
+async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
+    let ScanRunOptions {
+        pool,
+        job_id,
+        source,
+        album_rule_patterns,
+        checkpoint_every,
+        search_index_sync_every,
+        hash_parallelism,
+        hash_batch_size,
+        preview_cache,
+        preview_warmup_limiter,
+        resume_enabled,
+    } = options;
+
     let effective_hash_parallelism = resolve_hash_parallelism(hash_parallelism);
 
-    let current_status: Option<String> = sqlx::query_scalar("SELECT status FROM scan_jobs WHERE id = ?")
-        .bind(&job_id)
-        .fetch_optional(&pool)
-        .await
-        .map_err(|e| format!("failed to read scan job status before run (job_id={}): {}", job_id, e))?;
+    let current_status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM scan_jobs WHERE id = ?")
+            .bind(&job_id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to read scan job status before run (job_id={}): {}",
+                    job_id, e
+                )
+            })?;
     if current_status.as_deref() == Some(STATUS_CANCELLED) {
         info!(job_id, "scan job already cancelled before start");
         return Ok(());
@@ -3337,7 +3515,10 @@ async fn run_scan_job(
             msg
         })?;
     if transitioned.rows_affected() == 0 {
-        info!(job_id, "scan job does not transition to running, skip execution");
+        info!(
+            job_id,
+            "scan job does not transition to running, skip execution"
+        );
         return Ok(());
     }
 
@@ -3355,7 +3536,13 @@ async fn run_scan_job(
     )
     .await?;
 
-    info!(job_id, source_id = source.id, from = "pending", to = "running", "scan job status transition");
+    info!(
+        job_id,
+        source_id = source.id,
+        from = "pending",
+        to = "running",
+        "scan job status transition"
+    );
 
     let resume_cursor_path: Option<String> = if resume_enabled {
         sqlx::query_scalar("SELECT last_scanned_path FROM source_scan_states WHERE source_id = ?")
@@ -3378,13 +3565,9 @@ async fn run_scan_job(
     let collect_phase_started_at = Instant::now();
     let collect_result = tokio::task::spawn_blocking(move || {
         let adapter = LocalFsAdapter::new(false);
-        let mut entries = adapter.list_entries(&source_root).map_err(|e| {
-            format!(
-                "failed to list source entries at {}: {}",
-                source_root,
-                e
-            )
-        })?;
+        let mut entries = adapter
+            .list_entries(&source_root)
+            .map_err(|e| format!("failed to list source entries at {}: {}", source_root, e))?;
         entries.sort_by_key(|e| e.path.to_string_lossy().to_string());
 
         let mut entries_out: Vec<ScannedPhotoEntry> = Vec::new();
@@ -3578,11 +3761,18 @@ async fn run_scan_job(
                     )
                     .await?;
 
-                    info!(job_id, source_id = source.id, from = "running", to = "cancelled", "scan job status transition");
+                    info!(
+                        job_id,
+                        source_id = source.id,
+                        from = "running",
+                        to = "cancelled",
+                        "scan job status transition"
+                    );
                     return Ok(());
                 }
 
-                let mut batch_inputs = Vec::<(ScannedPhotoEntry, String, Option<ExistingPhotoMeta>)>::new();
+                let mut batch_inputs =
+                    Vec::<(ScannedPhotoEntry, String, Option<ExistingPhotoMeta>)>::new();
                 for entry in batch {
                     let storage_file_id = match resolve_storage_file_id(&entry.file_path) {
                         Ok(v) => v,
@@ -3600,9 +3790,7 @@ async fn run_scan_job(
                     };
 
                     let existing = existing_by_storage.get(&storage_file_id).cloned();
-                    if existing
-                        .as_ref()
-                        .and_then(|m| m.modified_at_fs.as_ref())
+                    if existing.as_ref().and_then(|m| m.modified_at_fs.as_ref())
                         == entry.modified_at_fs.as_ref()
                     {
                         collect_processed += 1;
@@ -3623,10 +3811,13 @@ async fn run_scan_job(
                         batch_inputs
                             .into_par_iter()
                             .map(|(entry, storage_file_id, existing)| {
-                                match build_scan_candidate_with_storage_id(entry.clone(), storage_file_id) {
+                                match build_scan_candidate_with_storage_id(
+                                    entry.clone(),
+                                    storage_file_id,
+                                ) {
                                     Ok(candidate) => BatchScanOutcome::Hashed {
                                         entry,
-                                        candidate,
+                                        candidate: Box::new(candidate),
                                         existing,
                                     },
                                     Err(error) => BatchScanOutcome::Failed { entry, error },
@@ -3675,7 +3866,9 @@ async fn run_scan_job(
 
                         let is_new_photo = existing_meta.is_none();
                         if let Some(existing) = existing_meta {
-                            if existing.content_hash.as_deref() == Some(candidate.content_hash.as_str()) {
+                            if existing.content_hash.as_deref()
+                                == Some(candidate.content_hash.as_str())
+                            {
                                 skipped_count += 1;
                                 continue;
                             }
@@ -3808,10 +4001,10 @@ async fn run_scan_job(
 
                 processed_count = collect_processed;
 
-                let should_checkpoint =
-                    collect_processed % (checkpoint_every as i64) == 0 || collect_processed == collect_target_count;
-                let should_sync_index =
-                    collect_processed % (search_index_sync_every as i64) == 0 || collect_processed == collect_target_count;
+                let should_checkpoint = collect_processed % (checkpoint_every as i64) == 0
+                    || collect_processed == collect_target_count;
+                let should_sync_index = collect_processed % (search_index_sync_every as i64) == 0
+                    || collect_processed == collect_target_count;
 
                 if should_checkpoint {
                     update_scan_checkpoint(
@@ -3866,7 +4059,10 @@ async fn run_scan_job(
 
                 if should_sync_index {
                     if !pending_index_new_photo_ids.is_empty() {
-                        let ids = pending_index_new_photo_ids.iter().cloned().collect::<Vec<_>>();
+                        let ids = pending_index_new_photo_ids
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
                         if let Err(e) = insert_photo_search_index_for_photo_ids(&pool, &ids).await {
                             warn!(job_id, source_id = source.id, error = %e, "failed to insert incremental photo search index for new photos");
                         } else {
@@ -3874,8 +4070,12 @@ async fn run_scan_job(
                         }
                     }
                     if !pending_index_updated_photo_ids.is_empty() {
-                        let ids = pending_index_updated_photo_ids.iter().cloned().collect::<Vec<_>>();
-                        if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
+                        let ids = pending_index_updated_photo_ids
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await
+                        {
                             warn!(job_id, source_id = source.id, error = %e, "failed to refresh incremental photo search index for updated photos");
                         } else {
                             pending_index_updated_photo_ids.clear();
@@ -3892,7 +4092,9 @@ async fn run_scan_job(
             }
 
             if !pending_index_updated_photo_ids.is_empty() {
-                let ids = pending_index_updated_photo_ids.into_iter().collect::<Vec<_>>();
+                let ids = pending_index_updated_photo_ids
+                    .into_iter()
+                    .collect::<Vec<_>>();
                 if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
                     warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining updated photos");
                 }
@@ -3943,7 +4145,13 @@ async fn run_scan_job(
                 )
                 .await?;
 
-                info!(job_id, source_id = source.id, from = "running", to = "cancelled", "scan job status transition");
+                info!(
+                    job_id,
+                    source_id = source.id,
+                    from = "running",
+                    to = "cancelled",
+                    "scan job status transition"
+                );
                 return Ok(());
             }
 
@@ -3978,15 +4186,15 @@ async fn run_scan_job(
                 let latest = sqlx::query(
                     "SELECT status, cancel_requested FROM scan_jobs WHERE id = ?",
                 )
-                    .bind(&job_id)
-                    .fetch_optional(&pool)
-                    .await
-                    .map_err(|e| {
-                        format!(
-                            "failed to inspect scan job {} after skipped success transition: {}",
-                            job_id, e
-                        )
-                    })?;
+                .bind(&job_id)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "failed to inspect scan job {} after skipped success transition: {}",
+                        job_id, e
+                    )
+                })?;
 
                 let latest_status = latest
                     .as_ref()
@@ -4174,7 +4382,7 @@ struct ExistingPhotoMeta {
 enum BatchScanOutcome {
     Hashed {
         entry: ScannedPhotoEntry,
-        candidate: ScannedPhotoCandidate,
+        candidate: Box<ScannedPhotoCandidate>,
         existing: Option<ExistingPhotoMeta>,
     },
     Failed {
@@ -4182,6 +4390,8 @@ enum BatchScanOutcome {
         error: String,
     },
 }
+
+type ExifScanData = (Option<String>, Option<String>, Option<f64>, Option<f64>);
 
 fn resolve_storage_file_id(file_path: &str) -> Result<String, String> {
     let adapter = LocalFsAdapter::new(false);
@@ -4243,7 +4453,13 @@ async fn get_or_build_preview_jpeg(
     let src = source_path.to_path_buf();
     tokio::task::spawn_blocking(move || get_or_build_preview_jpeg_blocking(&cfg, &src))
         .await
-        .map_err(|e| format!("preview build join failed (source={}): {}", source_path.display(), e))?
+        .map_err(|e| {
+            format!(
+                "preview build join failed (source={}): {}",
+                source_path.display(),
+                e
+            )
+        })?
 }
 
 async fn get_or_build_thumbnail_jpeg(
@@ -4255,7 +4471,13 @@ async fn get_or_build_thumbnail_jpeg(
     let src = source_path.to_path_buf();
     tokio::task::spawn_blocking(move || get_or_build_thumbnail_jpeg_blocking(&cfg, &src, max_edge))
         .await
-        .map_err(|e| format!("thumbnail build join failed (source={}): {}", source_path.display(), e))?
+        .map_err(|e| {
+            format!(
+                "thumbnail build join failed (source={}): {}",
+                source_path.display(),
+                e
+            )
+        })?
 }
 
 fn enqueue_preview_warmup_if_needed(
@@ -4302,13 +4524,23 @@ fn get_or_build_preview_jpeg_blocking(
     source_path: &StdPath,
 ) -> Result<PathBuf, String> {
     let cache_dir = PathBuf::from(&cache_config.dir).join("full");
-    fs::create_dir_all(&cache_dir)
-        .map_err(|e| format!("failed to create preview cache dir {}: {}", cache_dir.display(), e))?;
+    fs::create_dir_all(&cache_dir).map_err(|e| {
+        format!(
+            "failed to create preview cache dir {}: {}",
+            cache_dir.display(),
+            e
+        )
+    })?;
 
     maybe_cleanup_preview_cache(&cache_dir, cache_config)?;
 
-    let source_meta = fs::metadata(source_path)
-        .map_err(|e| format!("failed to stat source image {}: {}", source_path.display(), e))?;
+    let source_meta = fs::metadata(source_path).map_err(|e| {
+        format!(
+            "failed to stat source image {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
     let modified = source_meta
         .modified()
         .ok()
@@ -4324,8 +4556,13 @@ fn get_or_build_preview_jpeg_blocking(
     let key = sha256_hex(&key_raw);
     let cached = build_bucketed_cache_file_path(&cache_dir, &key, "jpg");
     if let Some(parent) = cached.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create preview bucket dir {}: {}", parent.display(), e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create preview bucket dir {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
     if cached.exists() {
         return Ok(cached);
@@ -4333,8 +4570,13 @@ fn get_or_build_preview_jpeg_blocking(
 
     let tmp = build_bucketed_cache_file_path(&cache_dir, &format!("{}.tmp", key), "jpg");
     if let Some(parent) = tmp.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create preview temp bucket dir {}: {}", parent.display(), e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create preview temp bucket dir {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
     if tmp.exists() {
         let _ = fs::remove_file(&tmp);
@@ -4359,13 +4601,23 @@ fn get_or_build_thumbnail_jpeg_blocking(
     max_edge: u32,
 ) -> Result<PathBuf, String> {
     let cache_dir = PathBuf::from(&cache_config.dir).join("thumbs");
-    fs::create_dir_all(&cache_dir)
-        .map_err(|e| format!("failed to create thumbnail cache dir {}: {}", cache_dir.display(), e))?;
+    fs::create_dir_all(&cache_dir).map_err(|e| {
+        format!(
+            "failed to create thumbnail cache dir {}: {}",
+            cache_dir.display(),
+            e
+        )
+    })?;
 
     maybe_cleanup_preview_cache(&cache_dir, cache_config)?;
 
-    let source_meta = fs::metadata(source_path)
-        .map_err(|e| format!("failed to stat thumbnail source {}: {}", source_path.display(), e))?;
+    let source_meta = fs::metadata(source_path).map_err(|e| {
+        format!(
+            "failed to stat thumbnail source {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
     let modified = source_meta
         .modified()
         .ok()
@@ -4382,8 +4634,13 @@ fn get_or_build_thumbnail_jpeg_blocking(
     let key = sha256_hex(&key_raw);
     let cached = build_bucketed_cache_file_path(&cache_dir, &key, "jpg");
     if let Some(parent) = cached.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create thumbnail bucket dir {}: {}", parent.display(), e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create thumbnail bucket dir {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
     if cached.exists() {
         return Ok(cached);
@@ -4391,17 +4648,34 @@ fn get_or_build_thumbnail_jpeg_blocking(
 
     let tmp = build_bucketed_cache_file_path(&cache_dir, &format!("{}.tmp", key), "jpg");
     if let Some(parent) = tmp.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create thumbnail temp bucket dir {}: {}", parent.display(), e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "failed to create thumbnail temp bucket dir {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
     if tmp.exists() {
         let _ = fs::remove_file(&tmp);
     }
 
     let img = image::ImageReader::open(source_path)
-        .map_err(|e| format!("failed to open thumbnail source {}: {}", source_path.display(), e))?
+        .map_err(|e| {
+            format!(
+                "failed to open thumbnail source {}: {}",
+                source_path.display(),
+                e
+            )
+        })?
         .decode()
-        .map_err(|e| format!("failed to decode thumbnail source {}: {}", source_path.display(), e))?;
+        .map_err(|e| {
+            format!(
+                "failed to decode thumbnail source {}: {}",
+                source_path.display(),
+                e
+            )
+        })?;
     let thumb = img.thumbnail(max_edge, max_edge);
     thumb
         .save_with_format(&tmp, image::ImageFormat::Jpeg)
@@ -4458,7 +4732,11 @@ fn convert_to_jpeg(source_path: &StdPath, out_path: &StdPath) -> Result<(), Stri
                 out.status.code(),
                 String::from_utf8_lossy(&out.stderr)
             )),
-            Err(e) => errors.push(format!("heif-convert unavailable (cmd={}): {}", cmd.display(), e)),
+            Err(e) => errors.push(format!(
+                "heif-convert unavailable (cmd={}): {}",
+                cmd.display(),
+                e
+            )),
         }
     }
 
@@ -4497,11 +4775,11 @@ fn resolve_converter_command_candidates(tool: &str) -> Vec<PathBuf> {
         _ => {}
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            push_candidate(exe_dir.join(tool));
-            push_candidate(exe_dir.join("bin").join(tool));
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        push_candidate(exe_dir.join(tool));
+        push_candidate(exe_dir.join("bin").join(tool));
     }
 
     if let Ok(cwd) = std::env::current_dir() {
@@ -4599,7 +4877,11 @@ fn resolve_windows_program_dirs(tool: &str) -> Vec<PathBuf> {
     out
 }
 
-fn push_command_candidate_variants(path: PathBuf, out: &mut Vec<PathBuf>, seen: &mut HashSet<String>) {
+fn push_command_candidate_variants(
+    path: PathBuf,
+    out: &mut Vec<PathBuf>,
+    seen: &mut HashSet<String>,
+) {
     let key = path.to_string_lossy().to_string();
     if seen.insert(key) {
         out.push(path.clone());
@@ -4638,19 +4920,21 @@ fn try_convert_to_jpeg_native(_source_path: &StdPath, _out_path: &StdPath) -> Re
     Err("native HEIF converter disabled (build with feature `heif_native`)".to_string())
 }
 
-fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheConfig) -> Result<(), String> {
+fn maybe_cleanup_preview_cache(
+    cache_dir: &StdPath,
+    cache_config: &PreviewCacheConfig,
+) -> Result<(), String> {
     let marker = cache_dir.join(".cleanup.marker");
     let now_secs = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    if let Ok(text) = fs::read_to_string(&marker) {
-        if let Ok(last) = text.trim().parse::<u64>() {
-            if now_secs.saturating_sub(last) < cache_config.cleanup_interval_seconds_effective() {
-                return Ok(());
-            }
-        }
+    if let Ok(text) = fs::read_to_string(&marker)
+        && let Ok(last) = text.trim().parse::<u64>()
+        && now_secs.saturating_sub(last) < cache_config.cleanup_interval_seconds_effective()
+    {
+        return Ok(());
     }
 
     let ttl_secs = cache_config.ttl_seconds();
@@ -4678,12 +4962,12 @@ fn maybe_cleanup_preview_cache(cache_dir: &StdPath, cache_config: &PreviewCacheC
             if path.extension().and_then(|v| v.to_str()) != Some("jpg") {
                 continue;
             }
-        let modified = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(now_secs);
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(now_secs);
             let size = meta.len();
 
             if now_secs.saturating_sub(modified) > ttl_secs {
@@ -4738,19 +5022,19 @@ fn resolve_hash_parallelism(configured: usize) -> usize {
 }
 
 fn is_photo_path(path: &StdPath) -> bool {
-    match file_ext_lowercase(path).as_deref() {
+    matches!(
+        file_ext_lowercase(path).as_deref(),
         Some("jpg")
-        | Some("jpeg")
-        | Some("png")
-        | Some("gif")
-        | Some("webp")
-        | Some("heic")
-        | Some("heif")
-        | Some("bmp")
-        | Some("tiff")
-        | Some("tif") => true,
-        _ => false,
-    }
+            | Some("jpeg")
+            | Some("png")
+            | Some("gif")
+            | Some("webp")
+            | Some("heic")
+            | Some("heif")
+            | Some("bmp")
+            | Some("tiff")
+            | Some("tif")
+    )
 }
 
 fn file_ext_lowercase(path: &StdPath) -> Option<String> {
@@ -4772,12 +5056,9 @@ fn mime_from_ext(ext: Option<&str>) -> Option<String> {
     }
 }
 
-fn parse_exif_for_scan(
-    file_path: &str,
-) -> Result<(Option<String>, Option<String>, Option<f64>, Option<f64>), String> {
-    let file = std::fs::File::open(file_path).map_err(|e| {
-        format!("failed to open file for exif parse at {}: {}", file_path, e)
-    })?;
+fn parse_exif_for_scan(file_path: &str) -> Result<ExifScanData, String> {
+    let file = std::fs::File::open(file_path)
+        .map_err(|e| format!("failed to open file for exif parse at {}: {}", file_path, e))?;
     let mut reader = std::io::BufReader::new(file);
 
     let exif = match exif::Reader::new().read_from_container(&mut reader) {
@@ -4793,9 +5074,7 @@ fn parse_exif_for_scan(
     Ok(parse_exif_payload(&exif))
 }
 
-fn parse_exif_payload(
-    exif: &exif::Exif,
-) -> (Option<String>, Option<String>, Option<f64>, Option<f64>) {
+fn parse_exif_payload(exif: &exif::Exif) -> ExifScanData {
     let mut exif_map = serde_json::Map::new();
     let mut date_time_original: Option<String> = None;
     let mut date_time_fallback: Option<String> = None;
@@ -4829,7 +5108,12 @@ fn parse_gps_from_exif(exif: &exif::Exif) -> (Option<f64>, Option<f64>) {
         .and_then(exif_gps_triplet_to_decimal);
     let lat_ref = exif
         .get_field(exif::Tag::GPSLatitudeRef, exif::In::PRIMARY)
-        .map(|f| f.display_value().with_unit(exif).to_string().to_ascii_uppercase())
+        .map(|f| {
+            f.display_value()
+                .with_unit(exif)
+                .to_string()
+                .to_ascii_uppercase()
+        })
         .unwrap_or_default();
 
     let lng = exif
@@ -4837,11 +5121,28 @@ fn parse_gps_from_exif(exif: &exif::Exif) -> (Option<f64>, Option<f64>) {
         .and_then(exif_gps_triplet_to_decimal);
     let lng_ref = exif
         .get_field(exif::Tag::GPSLongitudeRef, exif::In::PRIMARY)
-        .map(|f| f.display_value().with_unit(exif).to_string().to_ascii_uppercase())
+        .map(|f| {
+            f.display_value()
+                .with_unit(exif)
+                .to_string()
+                .to_ascii_uppercase()
+        })
         .unwrap_or_default();
 
-    let lat = lat.map(|v| if lat_ref.contains('S') { -v.abs() } else { v.abs() });
-    let lng = lng.map(|v| if lng_ref.contains('W') { -v.abs() } else { v.abs() });
+    let lat = lat.map(|v| {
+        if lat_ref.contains('S') {
+            -v.abs()
+        } else {
+            v.abs()
+        }
+    });
+    let lng = lng.map(|v| {
+        if lng_ref.contains('W') {
+            -v.abs()
+        } else {
+            v.abs()
+        }
+    });
 
     (lat, lng)
 }
@@ -4865,14 +5166,15 @@ fn exif_gps_triplet_to_decimal(field: &exif::Field) -> Option<f64> {
 }
 
 #[cfg(feature = "heif_native")]
-fn parse_exif_for_heif_path(
-    file_path: &str,
-) -> Result<(Option<String>, Option<String>, Option<f64>, Option<f64>), String> {
+fn parse_exif_for_heif_path(file_path: &str) -> Result<ExifScanData, String> {
     let ctx = libheif_rs::HeifContext::read_from_file(file_path)
         .map_err(|e| format!("failed to open HEIF for exif at {}: {}", file_path, e))?;
-    let handle = ctx
-        .primary_image_handle()
-        .map_err(|e| format!("failed to get HEIF primary image handle at {}: {}", file_path, e))?;
+    let handle = ctx.primary_image_handle().map_err(|e| {
+        format!(
+            "failed to get HEIF primary image handle at {}: {}",
+            file_path, e
+        )
+    })?;
 
     let mut ids = vec![0; 16];
     let count = handle.metadata_block_ids(&mut ids, b"Exif");
@@ -4901,9 +5203,7 @@ fn parse_exif_for_heif_path(
 }
 
 #[cfg(not(feature = "heif_native"))]
-fn parse_exif_for_heif_path(
-    _file_path: &str,
-) -> Result<(Option<String>, Option<String>, Option<f64>, Option<f64>), String> {
+fn parse_exif_for_heif_path(_file_path: &str) -> Result<ExifScanData, String> {
     Ok((None, None, None, None))
 }
 
@@ -5108,7 +5408,10 @@ async fn upsert_source_scan_state(
     Ok(())
 }
 
-async fn fetch_photo_ids_by_album(pool: &SqlitePool, album_id: &str) -> Result<Vec<String>, String> {
+async fn fetch_photo_ids_by_album(
+    pool: &SqlitePool,
+    album_id: &str,
+) -> Result<Vec<String>, String> {
     sqlx::query_scalar(
         "SELECT pa.photo_id
          FROM photo_albums pa
@@ -5118,14 +5421,20 @@ async fn fetch_photo_ids_by_album(pool: &SqlitePool, album_id: &str) -> Result<V
     .bind(album_id)
     .fetch_all(pool)
     .await
-    .map_err(|e| format!("failed to fetch photo ids by album (album_id={}): {}", album_id, e))
+    .map_err(|e| {
+        format!(
+            "failed to fetch photo ids by album (album_id={}): {}",
+            album_id, e
+        )
+    })
 }
 
 async fn bootstrap_photo_search_index_if_needed(pool: &SqlitePool) -> Result<(), String> {
-    let photo_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM photos WHERE deleted_at IS NULL")
-        .fetch_one(pool)
-        .await
-        .map_err(|e| format!("failed to count photos for search index bootstrap: {}", e))?;
+    let photo_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(1) FROM photos WHERE deleted_at IS NULL")
+            .fetch_one(pool)
+            .await
+            .map_err(|e| format!("failed to count photos for search index bootstrap: {}", e))?;
 
     let fts_count: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM photo_search_fts")
         .fetch_one(pool)
@@ -5138,11 +5447,17 @@ async fn bootstrap_photo_search_index_if_needed(pool: &SqlitePool) -> Result<(),
     }
 
     if fts_count > 0 {
-        info!(photo_count, fts_count, "skip photo search index full rebuild because index rows already exist");
+        info!(
+            photo_count,
+            fts_count, "skip photo search index full rebuild because index rows already exist"
+        );
         return Ok(());
     }
 
-    info!(photo_count, "photo search index empty, running one-time full rebuild");
+    info!(
+        photo_count,
+        "photo search index empty, running one-time full rebuild"
+    );
     rebuild_photo_search_index_all(pool).await
 }
 
@@ -5182,7 +5497,10 @@ async fn insert_photo_search_index_for_photo_ids(
     Ok(())
 }
 
-async fn rebuild_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
+async fn rebuild_photo_search_index_for_photo(
+    pool: &SqlitePool,
+    photo_id: &str,
+) -> Result<(), String> {
     let row = sqlx::query(
         "SELECT p.id,
                 IFNULL(p.file_name, '') AS file_name,
@@ -5200,7 +5518,12 @@ async fn rebuild_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str)
     .bind(photo_id)
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("failed to fetch photo for search index rebuild (photo_id={}): {}", photo_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to fetch photo for search index rebuild (photo_id={}): {}",
+            photo_id, e
+        )
+    })?;
 
     if row.is_none() {
         return remove_photo_search_index_for_photo(pool, photo_id).await;
@@ -5225,12 +5548,20 @@ async fn rebuild_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str)
         .bind(search_text)
         .execute(pool)
         .await
-        .map_err(|e| format!("failed to insert photo_search_fts row (photo_id={}): {}", photo_id, e))?;
+        .map_err(|e| {
+            format!(
+                "failed to insert photo_search_fts row (photo_id={}): {}",
+                photo_id, e
+            )
+        })?;
 
     Ok(())
 }
 
-async fn insert_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
+async fn insert_photo_search_index_for_photo(
+    pool: &SqlitePool,
+    photo_id: &str,
+) -> Result<(), String> {
     let row = sqlx::query(
         "SELECT p.id,
                 IFNULL(p.file_name, '') AS file_name,
@@ -5248,7 +5579,12 @@ async fn insert_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) 
     .bind(photo_id)
     .fetch_optional(pool)
     .await
-    .map_err(|e| format!("failed to fetch photo for search index insert (photo_id={}): {}", photo_id, e))?;
+    .map_err(|e| {
+        format!(
+            "failed to fetch photo for search index insert (photo_id={}): {}",
+            photo_id, e
+        )
+    })?;
 
     let Some(row) = row else {
         return Ok(());
@@ -5271,16 +5607,29 @@ async fn insert_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) 
         .bind(search_text)
         .execute(pool)
         .await
-        .map_err(|e| format!("failed to insert photo_search_fts row (photo_id={}): {}", photo_id, e))?;
+        .map_err(|e| {
+            format!(
+                "failed to insert photo_search_fts row (photo_id={}): {}",
+                photo_id, e
+            )
+        })?;
 
     Ok(())
 }
 
-async fn remove_photo_search_index_for_photo(pool: &SqlitePool, photo_id: &str) -> Result<(), String> {
+async fn remove_photo_search_index_for_photo(
+    pool: &SqlitePool,
+    photo_id: &str,
+) -> Result<(), String> {
     sqlx::query("DELETE FROM photo_search_fts WHERE photo_id = ?")
         .bind(photo_id)
         .execute(pool)
         .await
-        .map_err(|e| format!("failed to delete photo_search_fts row (photo_id={}): {}", photo_id, e))?;
+        .map_err(|e| {
+            format!(
+                "failed to delete photo_search_fts row (photo_id={}): {}",
+                photo_id, e
+            )
+        })?;
     Ok(())
 }

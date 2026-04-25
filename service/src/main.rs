@@ -137,7 +137,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let connect_opts = database_url
         .parse::<SqliteConnectOptions>()
         .map_err(|e| {
-            let msg = format!("failed to parse sqlite database url (url={}): {}", database_url, e);
+            let msg = format!(
+                "failed to parse sqlite database url (url={}): {}",
+                database_url, e
+            );
             error!("{}", msg);
             msg
         })?
@@ -151,7 +154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect_with(connect_opts)
         .await
         .map_err(|e| {
-            let msg = format!("failed to connect sqlite database (url={}): {}", database_url, e);
+            let msg = format!(
+                "failed to connect sqlite database (url={}): {}",
+                database_url, e
+            );
             error!("{}", msg);
             msg
         })?;

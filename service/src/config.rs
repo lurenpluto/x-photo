@@ -61,7 +61,7 @@ impl PreviewCacheConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StorageConfig {
     pub allow_delete: bool,
@@ -186,14 +186,6 @@ impl Default for LoggingConfig {
     }
 }
 
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self {
-            allow_delete: false,
-        }
-    }
-}
-
 impl Default for PreviewCacheConfig {
     fn default() -> Self {
         Self {
@@ -275,100 +267,68 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
     if let Ok(log_level) = std::env::var("LOG_LEVEL") {
         config.logging.level = log_level;
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_ENABLED") {
-        if let Ok(b) = v.parse::<bool>() {
-            config.preview_cache.enabled = b;
-        }
+    if let Some(b) = env_parse("PREVIEW_CACHE_ENABLED") {
+        config.preview_cache.enabled = b;
     }
     if let Ok(v) = std::env::var("PREVIEW_CACHE_DIR") {
         config.preview_cache.dir = v;
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_TTL") {
-        if parse_duration_seconds(&v).is_ok() {
-            config.preview_cache.ttl = v;
-        }
+    if let Some(v) = env_string_if("PREVIEW_CACHE_TTL", |v| parse_duration_seconds(v).is_ok()) {
+        config.preview_cache.ttl = v;
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_TTL_HOURS") {
-        if let Ok(n) = v.parse::<u64>() {
-            config.preview_cache.ttl_hours = n;
-            config.preview_cache.ttl = format!("{}h", n);
-        }
+    if let Some(n) = env_parse::<u64>("PREVIEW_CACHE_TTL_HOURS") {
+        config.preview_cache.ttl_hours = n;
+        config.preview_cache.ttl = format!("{}h", n);
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_MAX_BYTES") {
-        if let Ok(n) = parse_size_bytes(&v) {
-            config.preview_cache.max_bytes = n;
-        }
+    if let Ok(v) = std::env::var("PREVIEW_CACHE_MAX_BYTES")
+        && let Ok(n) = parse_size_bytes(&v)
+    {
+        config.preview_cache.max_bytes = n;
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_CLEANUP_INTERVAL_SECONDS") {
-        if let Ok(n) = v.parse::<u64>() {
-            config.preview_cache.cleanup_interval_seconds = n;
-            config.preview_cache.cleanup_interval = format!("{}s", n);
-        }
+    if let Some(n) = env_parse::<u64>("PREVIEW_CACHE_CLEANUP_INTERVAL_SECONDS") {
+        config.preview_cache.cleanup_interval_seconds = n;
+        config.preview_cache.cleanup_interval = format!("{}s", n);
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_CLEANUP_INTERVAL") {
-        if parse_duration_seconds(&v).is_ok() {
-            config.preview_cache.cleanup_interval = v;
-        }
+    if let Some(v) = env_string_if("PREVIEW_CACHE_CLEANUP_INTERVAL", |v| {
+        parse_duration_seconds(v).is_ok()
+    }) {
+        config.preview_cache.cleanup_interval = v;
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_WARMUP_ON_SCAN") {
-        if let Ok(b) = v.parse::<bool>() {
-            config.preview_cache.warmup_on_scan = b;
-        }
+    if let Some(b) = env_parse("PREVIEW_CACHE_WARMUP_ON_SCAN") {
+        config.preview_cache.warmup_on_scan = b;
     }
-    if let Ok(v) = std::env::var("PREVIEW_CACHE_WARMUP_CONCURRENCY") {
-        if let Ok(n) = v.parse::<usize>() {
-            config.preview_cache.warmup_concurrency = n;
-        }
+    if let Some(n) = env_parse("PREVIEW_CACHE_WARMUP_CONCURRENCY") {
+        config.preview_cache.warmup_concurrency = n;
     }
-    if let Ok(v) = std::env::var("SCAN_MAX_CONCURRENT_JOBS") {
-        if let Ok(n) = v.parse::<usize>() {
-            config.scan.max_concurrent_jobs = n;
-        }
+    if let Some(n) = env_parse("SCAN_MAX_CONCURRENT_JOBS") {
+        config.scan.max_concurrent_jobs = n;
     }
-    if let Ok(v) = std::env::var("SCAN_CHECKPOINT_EVERY") {
-        if let Ok(n) = v.parse::<usize>() {
-            config.scan.checkpoint_every = n;
-        }
+    if let Some(n) = env_parse("SCAN_CHECKPOINT_EVERY") {
+        config.scan.checkpoint_every = n;
     }
-    if let Ok(v) = std::env::var("SCAN_SEARCH_INDEX_SYNC_EVERY") {
-        if let Ok(n) = v.parse::<usize>() {
-            config.scan.search_index_sync_every = n;
-        }
+    if let Some(n) = env_parse("SCAN_SEARCH_INDEX_SYNC_EVERY") {
+        config.scan.search_index_sync_every = n;
     }
-    if let Ok(v) = std::env::var("SCAN_HASH_PARALLELISM") {
-        if let Ok(n) = v.parse::<usize>() {
-            config.scan.hash_parallelism = n;
-        }
+    if let Some(n) = env_parse("SCAN_HASH_PARALLELISM") {
+        config.scan.hash_parallelism = n;
     }
-    if let Ok(v) = std::env::var("SCAN_HASH_BATCH_SIZE") {
-        if let Ok(n) = v.parse::<usize>() {
-            config.scan.hash_batch_size = n;
-        }
+    if let Some(n) = env_parse("SCAN_HASH_BATCH_SIZE") {
+        config.scan.hash_batch_size = n;
     }
-    if let Ok(v) = std::env::var("SCAN_RESUME_ENABLED") {
-        if let Ok(b) = v.parse::<bool>() {
-            config.scan.resume_enabled = b;
-        }
+    if let Some(b) = env_parse("SCAN_RESUME_ENABLED") {
+        config.scan.resume_enabled = b;
     }
-    if let Ok(v) = std::env::var("SCAN_TASK_DISPATCH_INTERVAL_MS") {
-        if let Ok(n) = v.parse::<u64>() {
-            config.scan.task_dispatch_interval_ms = n;
-        }
+    if let Some(n) = env_parse("SCAN_TASK_DISPATCH_INTERVAL_MS") {
+        config.scan.task_dispatch_interval_ms = n;
     }
-    if let Ok(v) = std::env::var("SCAN_TASK_STALE_SECONDS") {
-        if let Ok(n) = v.parse::<i64>() {
-            config.scan.task_stale_seconds = n;
-        }
+    if let Some(n) = env_parse("SCAN_TASK_STALE_SECONDS") {
+        config.scan.task_stale_seconds = n;
     }
-    if let Ok(v) = std::env::var("SCAN_SOURCE_CHANGE_DETECT_ENABLED") {
-        if let Ok(b) = v.parse::<bool>() {
-            config.scan.source_change_detect_enabled = b;
-        }
+    if let Some(b) = env_parse("SCAN_SOURCE_CHANGE_DETECT_ENABLED") {
+        config.scan.source_change_detect_enabled = b;
     }
-    if let Ok(v) = std::env::var("SCAN_SOURCE_CHANGE_DETECT_INTERVAL_MS") {
-        if let Ok(n) = v.parse::<u64>() {
-            config.scan.source_change_detect_interval_ms = n;
-        }
+    if let Some(n) = env_parse("SCAN_SOURCE_CHANGE_DETECT_INTERVAL_MS") {
+        config.scan.source_change_detect_interval_ms = n;
     }
 
     let resolved_root = resolve_root_dir(&config.root);
@@ -380,20 +340,20 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
         )
     })?;
 
-    if let Some(path) = config.database.url.strip_prefix("sqlite://") {
-        if !path.starts_with('/') {
-            let db_path = resolved_root.join(path);
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!(
-                        "Could not create database parent directory at {}: {}",
-                        parent.display(),
-                        e
-                    )
-                })?;
-            }
-            config.database.url = format!("sqlite://{}", db_path.to_string_lossy());
+    if let Some(path) = config.database.url.strip_prefix("sqlite://")
+        && !path.starts_with('/')
+    {
+        let db_path = resolved_root.join(path);
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Could not create database parent directory at {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
         }
+        config.database.url = format!("sqlite://{}", db_path.to_string_lossy());
     }
 
     let log_dir_path = PathBuf::from(&config.logging.dir);
@@ -419,6 +379,18 @@ pub fn load() -> Result<LoadedConfig, Box<dyn std::error::Error>> {
         root: config.root.clone(),
         config,
     })
+}
+
+fn env_parse<T>(key: &str) -> Option<T>
+where
+    T: std::str::FromStr,
+{
+    std::env::var(key).ok()?.parse::<T>().ok()
+}
+
+fn env_string_if(key: &str, predicate: impl FnOnce(&str) -> bool) -> Option<String> {
+    let value = std::env::var(key).ok()?;
+    predicate(&value).then_some(value)
 }
 
 fn deserialize_size_bytes<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -466,7 +438,7 @@ fn parse_size_bytes(raw: &str) -> Result<u64, String> {
             return Err(format!(
                 "invalid size unit '{}' in '{}', use B/KB/MB/GB/TB",
                 unit, raw
-            ))
+            ));
         }
     };
 
@@ -504,7 +476,7 @@ fn parse_duration_seconds(raw: &str) -> Result<u64, String> {
             return Err(format!(
                 "invalid duration unit '{}' in '{}', use s/m/h/d",
                 unit, raw
-            ))
+            ));
         }
     };
 

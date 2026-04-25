@@ -1,13 +1,13 @@
 use std::path::Path;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request};
 use image::{ImageBuffer, Rgb};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use service::{api, config::AppConfig, db};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tempfile::TempDir;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -31,7 +31,10 @@ async fn cancel_scan_should_reach_cancelled() {
     )
     .await;
     assert_eq!(trigger["code"], 0, "trigger failed: {trigger}");
-    let job_id = trigger["data"]["job_id"].as_str().expect("job id").to_string();
+    let job_id = trigger["data"]["job_id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
 
     let cancel = call_json(
         &app,
@@ -77,7 +80,10 @@ async fn duplicate_scan_trigger_should_be_rejected() {
         Some(json!({})),
     )
     .await;
-    assert_ne!(second["code"], 0, "second trigger should be rejected: {second}");
+    assert_ne!(
+        second["code"], 0,
+        "second trigger should be rejected: {second}"
+    );
 }
 
 #[tokio::test]
@@ -94,7 +100,9 @@ async fn unreadable_photo_should_count_failed_but_not_break_scan() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&broken).expect("metadata broken").permissions();
+        let mut perms = std::fs::metadata(&broken)
+            .expect("metadata broken")
+            .permissions();
         perms.set_mode(0o000);
         std::fs::set_permissions(&broken, perms).expect("set broken permission");
     }
@@ -110,7 +118,10 @@ async fn unreadable_photo_should_count_failed_but_not_break_scan() {
     )
     .await;
     assert_eq!(trigger["code"], 0, "trigger failed: {trigger}");
-    let job_id = trigger["data"]["job_id"].as_str().expect("job id").to_string();
+    let job_id = trigger["data"]["job_id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
 
     let final_status = wait_scan_terminal(&app, &job_id).await;
     assert_eq!(final_status, "success");
@@ -130,7 +141,9 @@ async fn unreadable_photo_should_count_failed_but_not_break_scan() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&broken).expect("metadata broken").permissions();
+        let mut perms = std::fs::metadata(&broken)
+            .expect("metadata broken")
+            .permissions();
         perms.set_mode(0o644);
         let _ = std::fs::set_permissions(&broken, perms);
     }
@@ -178,7 +191,13 @@ async fn create_source(app: &axum::Router, photos_root: &Path) -> String {
 
 async fn wait_scan_terminal(app: &axum::Router, job_id: &str) -> String {
     for _ in 0..120 {
-        let status_resp = call_json(app, Method::GET, &format!("/rpc/v1/scan-jobs/{}", job_id), None).await;
+        let status_resp = call_json(
+            app,
+            Method::GET,
+            &format!("/rpc/v1/scan-jobs/{}", job_id),
+            None,
+        )
+        .await;
         let status = status_resp["data"]["status"]
             .as_str()
             .unwrap_or_default()

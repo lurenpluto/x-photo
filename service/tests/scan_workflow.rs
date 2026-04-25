@@ -1,16 +1,16 @@
 use std::path::Path;
 use std::process::Command;
 
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request};
-use filetime::{set_file_mtime, FileTime};
+use filetime::{FileTime, set_file_mtime};
 use image::{ImageBuffer, Rgb};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use service::{api, config::AppConfig, db};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqlitePoolOptions;
 use tempfile::TempDir;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -163,7 +163,12 @@ async fn scan_and_search_should_work() {
     )
     .await;
     assert_eq!(spaced_prefixed_search["code"], 0);
-    assert!(spaced_prefixed_search["data"]["total"].as_i64().unwrap_or(0) >= 1);
+    assert!(
+        spaced_prefixed_search["data"]["total"]
+            .as_i64()
+            .unwrap_or(0)
+            >= 1
+    );
 
     let favorite_set_resp = call_json(
         &app,

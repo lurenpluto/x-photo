@@ -1,10 +1,10 @@
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use service::{api, config::AppConfig, db};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tempfile::TempDir;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -92,7 +92,13 @@ async fn failed_scan_should_support_retry_and_overview() {
 
 async fn wait_scan_terminal(app: &axum::Router, job_id: &str) {
     for _ in 0..80 {
-        let status_resp = call_json(app, Method::GET, &format!("/rpc/v1/scan-jobs/{}", job_id), None).await;
+        let status_resp = call_json(
+            app,
+            Method::GET,
+            &format!("/rpc/v1/scan-jobs/{}", job_id),
+            None,
+        )
+        .await;
         let status = status_resp["data"]["status"].as_str().unwrap_or_default();
         if status == "success" || status == "failed" || status == "cancelled" {
             return;

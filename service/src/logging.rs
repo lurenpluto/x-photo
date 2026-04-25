@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use chrono::Local;
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub fn init_logging(
     service_name: &str,

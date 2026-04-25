@@ -21,16 +21,16 @@ impl LocalFsAdapter {
             return Err(StorageError::InvalidPath(path.to_string()));
         }
 
-        if raw == "~" {
-            if let Ok(home) = std::env::var("HOME") {
-                return Ok(PathBuf::from(home));
-            }
+        if raw == "~"
+            && let Ok(home) = std::env::var("HOME")
+        {
+            return Ok(PathBuf::from(home));
         }
 
-        if let Some(stripped) = raw.strip_prefix("~/") {
-            if let Ok(home) = std::env::var("HOME") {
-                return Ok(PathBuf::from(home).join(stripped));
-            }
+        if let Some(stripped) = raw.strip_prefix("~/")
+            && let Ok(home) = std::env::var("HOME")
+        {
+            return Ok(PathBuf::from(home).join(stripped));
         }
 
         Ok(PathBuf::from(raw))
@@ -61,24 +61,6 @@ impl LocalFsAdapter {
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalize_path_should_expand_tilde_prefix() {
-        let Ok(home) = std::env::var("HOME") else {
-            return;
-        };
-        let adapter = LocalFsAdapter::new(false);
-        let path = adapter
-            .normalize_path("~/.xphoto/tests")
-            .expect("normalize path should succeed");
-        assert!(path.starts_with(home));
-        assert!(path.to_string_lossy().contains(".xphoto/tests"));
     }
 }
 
@@ -137,5 +119,23 @@ impl StorageAdapter for LocalFsAdapter {
         }
 
         Ok(hex::encode(hasher.finalize()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_path_should_expand_tilde_prefix() {
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
+        let adapter = LocalFsAdapter::new(false);
+        let path = adapter
+            .normalize_path("~/.xphoto/tests")
+            .expect("normalize path should succeed");
+        assert!(path.starts_with(home));
+        assert!(path.to_string_lossy().contains(".xphoto/tests"));
     }
 }
