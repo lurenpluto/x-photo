@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::process::Command;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request};
@@ -212,6 +213,136 @@ async fn scan_and_search_should_work() {
     assert!(
         albums.iter().any(|a| a["name"] == "Another_Album"),
         "underscore-rule auto album missing"
+    );
+}
+
+#[tokio::test]
+async fn generated_sample_data_should_scan_exif_and_album() {
+    let tmp = TempDir::new().expect("temp dir");
+    let photos_root = tmp.path().join("generated_sample");
+    let builder = env!("CARGO_BIN_EXE_testdata_builder");
+    let status = Command::new(builder)
+        .arg(&photos_root)
+        .arg("--strategy")
+        .arg("sample")
+        .arg("--year")
+        .arg("2025")
+        .arg("--seed")
+        .arg("42")
+        .status()
+        .expect("run testdata_builder");
+    assert!(status.success(), "testdata_builder should succeed");
+
+    let db_file = tmp.path().join("generated_sample.db");
+    let database_url = format!("sqlite://{}", db_file.display());
+    let connect_opts = database_url
+        .parse::<SqliteConnectOptions>()
+        .expect("parse sqlite connect options")
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(connect_opts)
+        .await
+        .expect("connect sqlite");
+    db::init_schema(&pool).await.expect("init schema");
+
+    let mut cfg = AppConfig::default();
+    cfg.scan.max_concurrent_jobs = 1;
+    cfg.scan.task_dispatch_interval_ms = 200;
+    let app = api::router(pool, cfg);
+
+    let create_source_resp = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/sources",
+        Some(json!({
+            "name": "generated-sample",
+            "root_path": photos_root.to_string_lossy(),
+            "source_type": "local_fs"
+        })),
+    )
+    .await;
+    assert_eq!(create_source_resp["code"], 0);
+    let source_id = create_source_resp["data"]["id"]
+        .as_str()
+        .expect("source id")
+        .to_string();
+
+    let trigger_resp = call_json(
+        &app,
+        Method::POST,
+        &format!("/rpc/v1/sources/{}/scan", source_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(trigger_resp["code"], 0);
+    let job_id = trigger_resp["data"]["job_id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+
+    wait_scan_success(&app, &job_id).await;
+
+    let search_resp = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/photos/search",
+        Some(json!({"page": 1, "page_size": 20})),
+    )
+    .await;
+    assert_eq!(search_resp["code"], 0);
+    assert_eq!(search_resp["data"]["total"], 1);
+    let item = &search_resp["data"]["items"][0];
+    assert_eq!(item["file_name"], "IMG_SAMPLE_001.jpg");
+    assert_eq!(item["shot_at"], "2020-02-01T10:11:12+00:00");
+    assert_eq!(item["sort_time"], "2020-02-01T10:11:12+00:00");
+    assert_close(item["gps_lat"].as_f64().expect("gps_lat"), 37.86, 0.0001);
+    assert_close(item["gps_lng"].as_f64().expect("gps_lng"), -119.54, 0.0001);
+
+    let albums_resp = call_json(&app, Method::GET, "/rpc/v1/albums", None).await;
+    assert_eq!(albums_resp["code"], 0);
+    let albums = albums_resp["data"].as_array().cloned().unwrap_or_default();
+    assert!(
+        albums
+            .iter()
+            .any(|a| a["name"] == "Sample.Album" && a["album_date"] == "2020-02-01"),
+        "sample auto album missing: {}",
+        albums_resp
+    );
+}
+
+async fn wait_scan_success(app: &axum::Router, job_id: &str) {
+    for _ in 0..50 {
+        let status_resp = call_json(
+            app,
+            Method::GET,
+            &format!("/rpc/v1/scan-jobs/{}", job_id),
+            None,
+        )
+        .await;
+        let status = status_resp["data"]["status"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if status == "success" {
+            return;
+        }
+        if status == "failed" || status == "cancelled" {
+            panic!("scan job ends in {}: {}", status, status_resp);
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    panic!("scan job not completed in time");
+}
+
+fn assert_close(actual: f64, expected: f64, tolerance: f64) {
+    assert!(
+        (actual - expected).abs() <= tolerance,
+        "expected {} within {} of {}, got {}",
+        actual,
+        tolerance,
+        expected,
+        actual
     );
 }
 

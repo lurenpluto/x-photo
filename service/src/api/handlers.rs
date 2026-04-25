@@ -4772,25 +4772,25 @@ fn parse_exif_for_scan(
     Ok(parse_exif_payload(&exif))
 }
 
-fn parse_exif_payload(exif: &exif::Exif) -> (Option<String>, Option<String>, Option<f64>, Option<f64>) {
+fn parse_exif_payload(
+    exif: &exif::Exif,
+) -> (Option<String>, Option<String>, Option<f64>, Option<f64>) {
     let mut exif_map = serde_json::Map::new();
-    let mut shot_at: Option<String> = None;
+    let mut date_time_original: Option<String> = None;
+    let mut date_time_fallback: Option<String> = None;
 
     for field in exif.fields() {
         let key = format!("{:?}", field.tag);
         let value = field.display_value().with_unit(exif).to_string();
+        if field.tag == exif::Tag::DateTimeOriginal {
+            date_time_original = parse_exif_datetime_to_rfc3339(&value);
+        } else if field.tag == exif::Tag::DateTime && date_time_fallback.is_none() {
+            date_time_fallback = parse_exif_datetime_to_rfc3339(&value);
+        }
         exif_map.insert(key, serde_json::Value::String(value));
     }
 
-    let shot_raw = exif
-        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
-        .or_else(|| exif.get_field(exif::Tag::DateTime, exif::In::PRIMARY))
-        .map(|f| f.display_value().with_unit(exif).to_string());
-
-    if let Some(raw) = shot_raw {
-        shot_at = parse_exif_datetime_to_rfc3339(&raw);
-    }
-
+    let shot_at = date_time_original.or(date_time_fallback);
     let (gps_lat, gps_lng) = parse_gps_from_exif(exif);
 
     let exif_json = if exif_map.is_empty() {
@@ -4888,7 +4888,9 @@ fn parse_exif_for_heif_path(
 
 fn parse_exif_datetime_to_rfc3339(value: &str) -> Option<String> {
     let normalized = value.trim();
-    let parsed = NaiveDateTime::parse_from_str(normalized, "%Y:%m:%d %H:%M:%S").ok()?;
+    let parsed = NaiveDateTime::parse_from_str(normalized, "%Y:%m:%d %H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(normalized, "%Y-%m-%d %H:%M:%S"))
+        .ok()?;
     Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc).to_rfc3339())
 }
 
