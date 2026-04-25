@@ -1,0 +1,230 @@
+{
+  "label": "mutation-stress-full2021",
+  "generated_at": "2026-04-25T16:49:28Z",
+  "data_root": "/home/bucky/.xphoto/test_data",
+  "profile": "stress",
+  "scenario": "family-full-2021",
+  "base_url": "http://127.0.0.1:58130/rpc/v1",
+  "passed": true,
+  "checks": {
+    "initial_scan_success": true,
+    "initial_counts_match": true,
+    "delete_rescan_success": true,
+    "delete_counts_match": true,
+    "append_rescan_success": true,
+    "append_counts_match": true,
+    "cancel_under_load_reaches_cancelled": true,
+    "retry_initial_failure": true,
+    "retry_after_fix_success": true,
+    "retry_counts_match": true,
+    "duplicate_storage_groups_zero": true
+  },
+  "metrics": {
+    "baseline_count": 3018,
+    "delete_count": 25,
+    "append_count": 10,
+    "expected_after_delete": 2993,
+    "expected_after_append": 3003,
+    "initial": {
+      "api_total": 3018,
+      "db": {
+        "active_photos": 3018,
+        "deleted_photos": 0,
+        "fts_rows": 3018,
+        "photo_albums": 3018
+      }
+    },
+    "after_delete": {
+      "api_total": 2993,
+      "db": {
+        "active_photos": 2993,
+        "deleted_photos": 25,
+        "fts_rows": 2993,
+        "photo_albums": 2993
+      }
+    },
+    "after_append": {
+      "api_total": 3003,
+      "db": {
+        "active_photos": 3003,
+        "deleted_photos": 25,
+        "fts_rows": 3003,
+        "photo_albums": 2993
+      }
+    },
+    "cancel": {
+      "cancel_response": {
+        "code": 0,
+        "message": "ok",
+        "data": {
+          "affected": 1
+        }
+      },
+      "job": {
+        "cancel_requested": true,
+        "error_message": "cancel requested while running",
+        "failed_count": 0,
+        "finished_at": "2026-04-25T16:49:26.719954943+00:00",
+        "id": "0860acc5f1e85df17a1f373926f2c383bfb77ffc6dcad2cd60157cd4e052a1d0",
+        "new_count": null,
+        "processed_count": 0,
+        "resume_cursor_path": null,
+        "source_id": "d283b5900e04d40a447c607e5a12ec49ee7b20e78dcbe9bcbe52da47592cffc9",
+        "started_at": "2026-04-25T16:49:26.518871951+00:00",
+        "status": "cancelled",
+        "total_count": 17227,
+        "trigger_type": "manual",
+        "updated_count": null
+      }
+    },
+    "retry": {
+      "failed_job": {
+        "cancel_requested": false,
+        "error_message": "failed to list source entries at /tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/retry_missing: io error: No such file or directory (os error 2)",
+        "failed_count": 1,
+        "finished_at": "2026-04-25T16:49:26.724376502+00:00",
+        "id": "382776bf9df046215d0811d8d8af7571db50f7942ea72b2c0fcd2ff81a9334a3",
+        "new_count": null,
+        "processed_count": 0,
+        "resume_cursor_path": null,
+        "source_id": "e6b1a77c1ae7e7d0dba5e26f73cbaccdeff4f833dd3b95f50b79aa5516bd6bfa",
+        "started_at": "2026-04-25T16:49:26.723877299+00:00",
+        "status": "failed",
+        "total_count": null,
+        "trigger_type": "manual",
+        "updated_count": null
+      },
+      "retry_job": {
+        "cancel_requested": false,
+        "error_message": null,
+        "failed_count": 0,
+        "finished_at": "2026-04-25T16:49:27.731260540+00:00",
+        "id": "e192ac1cf71b956dc5ff49c7f918d39862a12ccd5327ac1b09e539edd67623af",
+        "new_count": 1,
+        "processed_count": 1,
+        "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/retry_missing/retry_seed.jpg",
+        "source_id": "e6b1a77c1ae7e7d0dba5e26f73cbaccdeff4f833dd3b95f50b79aa5516bd6bfa",
+        "started_at": "2026-04-25T16:49:27.728377931+00:00",
+        "status": "success",
+        "total_count": 1,
+        "trigger_type": "retry",
+        "updated_count": 0
+      },
+      "api_total": 1,
+      "db": {
+        "active_photos": 1,
+        "deleted_photos": 0,
+        "fts_rows": 1,
+        "photo_albums": 0
+      }
+    },
+    "global": {
+      "sources": 3,
+      "active_photos": 3260,
+      "deleted_photos": 25,
+      "fts_rows": 3004,
+      "duplicate_storage_groups": 0
+    }
+  },
+  "jobs": {
+    "mutation_initial": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T16:49:23.456502898+00:00",
+      "id": "439b602046acd68450361310be8f20d971f32a72f44e7758d696abf5b4592c57",
+      "new_count": 3018,
+      "processed_count": 3018,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/mutation_data/family-full-2021/2021.12.25.Acadia.National.Park/IMG_20211225_053.jpg",
+      "source_id": "47f90482c2df24d3259f82184fa11e3fe736c9d07a1dad212472719d161f803b",
+      "started_at": "2026-04-25T16:49:20.445863106+00:00",
+      "status": "success",
+      "total_count": 3018,
+      "trigger_type": "manual",
+      "updated_count": 0
+    },
+    "mutation_delete": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T16:49:24.565320761+00:00",
+      "id": "81a1ccfc82a9dd0549d0961825bc01bd2c9b9d95e585723ba0d596b86b9086ce",
+      "new_count": 0,
+      "processed_count": 2993,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/mutation_data/family-full-2021/2021.12.25.Acadia.National.Park/IMG_20211225_053.jpg",
+      "source_id": "47f90482c2df24d3259f82184fa11e3fe736c9d07a1dad212472719d161f803b",
+      "started_at": "2026-04-25T16:49:24.468528110+00:00",
+      "status": "success",
+      "total_count": 2993,
+      "trigger_type": "manual",
+      "updated_count": 25
+    },
+    "mutation_append": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T16:49:25.565336846+00:00",
+      "id": "0c921bc483c60a1cdb3a3ac6747f5551af7922d9361b14fc27e670304cfa3735",
+      "new_count": 10,
+      "processed_count": 3003,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/mutation_data/family-full-2021/_mutation_append/appended_00010.jpg",
+      "source_id": "47f90482c2df24d3259f82184fa11e3fe736c9d07a1dad212472719d161f803b",
+      "started_at": "2026-04-25T16:49:25.500192519+00:00",
+      "status": "success",
+      "total_count": 3003,
+      "trigger_type": "manual",
+      "updated_count": 0
+    },
+    "cancel_load": {
+      "cancel_requested": true,
+      "error_message": "cancel requested while running",
+      "failed_count": 0,
+      "finished_at": "2026-04-25T16:49:26.719954943+00:00",
+      "id": "0860acc5f1e85df17a1f373926f2c383bfb77ffc6dcad2cd60157cd4e052a1d0",
+      "new_count": null,
+      "processed_count": 0,
+      "resume_cursor_path": null,
+      "source_id": "d283b5900e04d40a447c607e5a12ec49ee7b20e78dcbe9bcbe52da47592cffc9",
+      "started_at": "2026-04-25T16:49:26.518871951+00:00",
+      "status": "cancelled",
+      "total_count": 17227,
+      "trigger_type": "manual",
+      "updated_count": null
+    },
+    "retry_missing_initial": {
+      "cancel_requested": false,
+      "error_message": "failed to list source entries at /tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/retry_missing: io error: No such file or directory (os error 2)",
+      "failed_count": 1,
+      "finished_at": "2026-04-25T16:49:26.724376502+00:00",
+      "id": "382776bf9df046215d0811d8d8af7571db50f7942ea72b2c0fcd2ff81a9334a3",
+      "new_count": null,
+      "processed_count": 0,
+      "resume_cursor_path": null,
+      "source_id": "e6b1a77c1ae7e7d0dba5e26f73cbaccdeff4f833dd3b95f50b79aa5516bd6bfa",
+      "started_at": "2026-04-25T16:49:26.723877299+00:00",
+      "status": "failed",
+      "total_count": null,
+      "trigger_type": "manual",
+      "updated_count": null
+    },
+    "retry_missing": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T16:49:27.731260540+00:00",
+      "id": "e192ac1cf71b956dc5ff49c7f918d39862a12ccd5327ac1b09e539edd67623af",
+      "new_count": 1,
+      "processed_count": 1,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/retry_missing/retry_seed.jpg",
+      "source_id": "e6b1a77c1ae7e7d0dba5e26f73cbaccdeff4f833dd3b95f50b79aa5516bd6bfa",
+      "started_at": "2026-04-25T16:49:27.728377931+00:00",
+      "status": "success",
+      "total_count": 1,
+      "trigger_type": "retry",
+      "updated_count": 0
+    }
+  },
+  "db_path": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/mutation.db",
+  "log_dir": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x/logs",
+  "run_dir": "/tmp/xphoto_scan_mutation_mutation-stress-full2021.cx2_jl0x"
+}

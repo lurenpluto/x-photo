@@ -1,0 +1,58 @@
+{
+  "label": "stress-single-cj2-hp8-bs128",
+  "generated_at": "2026-04-25T15:01:00.800929+00:00",
+  "data_root": "/home/bucky/.xphoto/test_data",
+  "profile": "stress",
+  "mode": "single",
+  "base_url": "http://127.0.0.1:58103/rpc/v1",
+  "elapsed_sec": 26,
+  "expected": {
+    "photos": 17227,
+    "albums_manifest_sum": 326,
+    "summary": "/home/bucky/.xphoto/test_data/_manifests/_summary_stress.json"
+  },
+  "actual": {
+    "api_search_total": 17227,
+    "job_failed_count_sum": 0,
+    "job_new_count_sum": 17227,
+    "job_updated_count_sum": 0,
+    "job_processed_count_sum": 17227,
+    "db": {
+      "sources": 1,
+      "active_photos": 17227,
+      "deleted_photos": 0,
+      "albums": 326,
+      "photo_albums": 17227,
+      "favorites": 0,
+      "fts_rows": 17227,
+      "duplicate_storage_groups": 0
+    }
+  },
+  "checks": {
+    "all_jobs_success": true,
+    "job_failed_count_zero": true,
+    "api_search_total_matches_expected": true,
+    "db_active_photo_count_matches_expected": true,
+    "fts_rows_match_active_photos": true,
+    "duplicate_storage_groups_zero": true
+  },
+  "passed": true,
+  "db_path": "/tmp/xphoto_scan_stress_stress-single-cj2-hp8-bs128.zOSUwc/stress.db",
+  "log_dir": "/tmp/xphoto_scan_stress_stress-single-cj2-hp8-bs128.zOSUwc/logs",
+  "jobs": [
+    {
+      "scenario": "all",
+      "source_id": "d283b5900e04d40a447c607e5a12ec49ee7b20e78dcbe9bcbe52da47592cffc9",
+      "job_id": "b7afd9feca6a5b21df7fe247017509d1e75ddb52fa74b6b2907266119bf3bf40",
+      "status": "success",
+      "processed_count": 17227,
+      "total_count": 17227,
+      "new_count": 17227,
+      "updated_count": 0,
+      "failed_count": 0,
+      "error_message": null,
+      "started_at": "2026-04-25T15:00:34.470634621+00:00",
+      "finished_at": "2026-04-25T15:01:00.417394131+00:00"
+    }
+  ]
+}
