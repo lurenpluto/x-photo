@@ -64,6 +64,7 @@ start.bat
 - 简版手册（面向非开发用户）：[`doc/用户操作手册（简版）.md`](doc/用户操作手册（简版）.md)
 - Web 控制台说明：[`web/README.md`](web/README.md)
 - 后端 OpenAPI：[`doc/OpenAPI.yaml`](doc/OpenAPI.yaml)
+- 问题与修复跟踪：[`doc/问题修复跟踪.md`](doc/问题修复跟踪.md)
 - 任务系统设计：[`doc/任务系统设计.md`](doc/任务系统设计.md)
 - 日志规范：[`doc/日志规范.md`](doc/日志规范.md)
 
