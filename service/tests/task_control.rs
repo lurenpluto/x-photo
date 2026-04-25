@@ -1,32 +1,15 @@
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request};
-use serde_json::{Value, json};
-use service::{api, config::AppConfig, db};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+mod common;
+
+use axum::http::Method;
+use common::{build_test_app, call_json, wait_scan_terminal};
+use serde_json::json;
 use tempfile::TempDir;
-use tokio::time::{Duration, sleep};
-use tower::ServiceExt;
 
 #[tokio::test]
 async fn failed_scan_should_support_retry_and_overview() {
     let tmp = TempDir::new().expect("temp dir");
-    let db_file = tmp.path().join("task_control.db");
-    let database_url = format!("sqlite://{}", db_file.display());
-    let connect_opts = database_url
-        .parse::<SqliteConnectOptions>()
-        .expect("parse sqlite connect options")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(connect_opts)
-        .await
-        .expect("connect sqlite");
-    db::init_schema(&pool).await.expect("init schema");
-
-    let mut cfg = AppConfig::default();
-    cfg.scan.task_dispatch_interval_ms = 200;
-    cfg.scan.max_concurrent_jobs = 1;
-    let app = api::router(pool, cfg);
+    let test_app = build_test_app(tmp.path(), "task_control.db").await;
+    let app = test_app.app;
 
     let bad_root = tmp.path().join("not_exists_scan_dir");
     let create_source_resp = call_json(
@@ -88,38 +71,4 @@ async fn failed_scan_should_support_retry_and_overview() {
     assert_eq!(overview_resp["code"], 0);
     assert!(overview_resp["data"]["health"].is_object());
     assert!(overview_resp["data"]["active_tasks"].is_array());
-}
-
-async fn wait_scan_terminal(app: &axum::Router, job_id: &str) {
-    for _ in 0..80 {
-        let status_resp = call_json(
-            app,
-            Method::GET,
-            &format!("/rpc/v1/scan-jobs/{}", job_id),
-            None,
-        )
-        .await;
-        let status = status_resp["data"]["status"].as_str().unwrap_or_default();
-        if status == "success" || status == "failed" || status == "cancelled" {
-            return;
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-    panic!("scan job does not reach terminal state in time");
-}
-
-async fn call_json(app: &axum::Router, method: Method, path: &str, body: Option<Value>) -> Value {
-    let payload = body.unwrap_or_else(|| json!({}));
-    let req = Request::builder()
-        .method(method)
-        .uri(path)
-        .header("content-type", "application/json")
-        .body(Body::from(payload.to_string()))
-        .expect("build request");
-
-    let response = app.clone().oneshot(req).await.expect("call route");
-    let bytes = to_bytes(response.into_body(), 5 * 1024 * 1024)
-        .await
-        .expect("read body");
-    serde_json::from_slice(&bytes).expect("parse json")
 }

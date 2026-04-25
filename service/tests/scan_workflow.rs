@@ -1,17 +1,12 @@
-use std::path::Path;
-use std::process::Command;
+mod common;
 
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request};
-use filetime::{FileTime, set_file_mtime};
-use image::{ImageBuffer, Rgb};
-use serde_json::{Value, json};
-use service::{api, config::AppConfig, db};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::sqlite::SqlitePoolOptions;
+use axum::http::Method;
+use common::{
+    assert_close, build_test_app, build_test_image, call_json, create_source, generate_sample_data,
+    trigger_scan, wait_scan_success,
+};
+use serde_json::json;
 use tempfile::TempDir;
-use tokio::time::{Duration, sleep};
-use tower::ServiceExt;
 
 #[tokio::test]
 async fn scan_and_search_should_work() {
@@ -30,78 +25,13 @@ async fn scan_and_search_should_work() {
     build_test_image(&underscore_album.join("IMG_B2.jpg"));
     build_test_image(&misc_album.join("IMG_C3.jpg"));
 
-    let db_file = tmp.path().join("test.db");
-    let database_url = format!("sqlite://{}", db_file.display());
-    let connect_opts = database_url
-        .parse::<SqliteConnectOptions>()
-        .expect("parse sqlite connect options")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(connect_opts)
-        .await
-        .expect("connect sqlite");
-    db::init_schema(&pool).await.expect("init schema");
+    let test_app = build_test_app(tmp.path(), "test.db").await;
+    let app = test_app.app;
+    let pool_for_test = test_app.pool;
 
-    let mut cfg = AppConfig::default();
-    cfg.scan.max_concurrent_jobs = 1;
-    cfg.scan.task_dispatch_interval_ms = 200;
-    let pool_for_test = pool.clone();
-    let app = api::router(pool, cfg);
-
-    let create_source_resp = call_json(
-        &app,
-        Method::POST,
-        "/rpc/v1/sources",
-        Some(json!({
-            "name": "local-test",
-            "root_path": photos_root.to_string_lossy(),
-            "source_type": "local_fs"
-        })),
-    )
-    .await;
-    assert_eq!(create_source_resp["code"], 0);
-    let source_id = create_source_resp["data"]["id"]
-        .as_str()
-        .expect("source id")
-        .to_string();
-
-    let trigger_resp = call_json(
-        &app,
-        Method::POST,
-        &format!("/rpc/v1/sources/{}/scan", source_id),
-        Some(json!({})),
-    )
-    .await;
-    assert_eq!(trigger_resp["code"], 0);
-    let job_id = trigger_resp["data"]["job_id"]
-        .as_str()
-        .expect("job id")
-        .to_string();
-
-    let mut done = false;
-    for _ in 0..50 {
-        let status_resp = call_json(
-            &app,
-            Method::GET,
-            &format!("/rpc/v1/scan-jobs/{}", job_id),
-            None,
-        )
-        .await;
-        let status = status_resp["data"]["status"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        if status == "success" {
-            done = true;
-            break;
-        }
-        if status == "failed" || status == "cancelled" {
-            panic!("scan job ends in {}: {}", status, status_resp);
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-    assert!(done, "scan job not completed in time");
+    let source_id = create_source(&app, "local-test", &photos_root).await;
+    let job_id = trigger_scan(&app, &source_id).await;
+    wait_scan_success(&app, &job_id).await;
 
     let search_resp = call_json(
         &app,
@@ -235,66 +165,18 @@ async fn scan_and_search_should_work() {
 async fn generated_sample_data_should_scan_exif_and_album() {
     let tmp = TempDir::new().expect("temp dir");
     let photos_root = tmp.path().join("generated_sample");
-    let builder = env!("CARGO_BIN_EXE_testdata_builder");
-    let status = Command::new(builder)
-        .arg(&photos_root)
-        .arg("--strategy")
-        .arg("sample")
-        .arg("--year")
-        .arg("2025")
-        .arg("--seed")
-        .arg("42")
-        .status()
-        .expect("run testdata_builder");
-    assert!(status.success(), "testdata_builder should succeed");
+    let manifest_path = generate_sample_data(&photos_root);
 
-    let db_file = tmp.path().join("generated_sample.db");
-    let database_url = format!("sqlite://{}", db_file.display());
-    let connect_opts = database_url
-        .parse::<SqliteConnectOptions>()
-        .expect("parse sqlite connect options")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(connect_opts)
-        .await
-        .expect("connect sqlite");
-    db::init_schema(&pool).await.expect("init schema");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    assert_eq!(manifest["strategy"], "sample");
+    assert_eq!(manifest["total_photos"], 1);
 
-    let mut cfg = AppConfig::default();
-    cfg.scan.max_concurrent_jobs = 1;
-    cfg.scan.task_dispatch_interval_ms = 200;
-    let app = api::router(pool, cfg);
-
-    let create_source_resp = call_json(
-        &app,
-        Method::POST,
-        "/rpc/v1/sources",
-        Some(json!({
-            "name": "generated-sample",
-            "root_path": photos_root.to_string_lossy(),
-            "source_type": "local_fs"
-        })),
-    )
-    .await;
-    assert_eq!(create_source_resp["code"], 0);
-    let source_id = create_source_resp["data"]["id"]
-        .as_str()
-        .expect("source id")
-        .to_string();
-
-    let trigger_resp = call_json(
-        &app,
-        Method::POST,
-        &format!("/rpc/v1/sources/{}/scan", source_id),
-        Some(json!({})),
-    )
-    .await;
-    assert_eq!(trigger_resp["code"], 0);
-    let job_id = trigger_resp["data"]["job_id"]
-        .as_str()
-        .expect("job id")
-        .to_string();
+    let test_app = build_test_app(tmp.path(), "generated_sample.db").await;
+    let app = test_app.app;
+    let source_id = create_source(&app, "generated-sample", &photos_root).await;
+    let job_id = trigger_scan(&app, &source_id).await;
 
     wait_scan_success(&app, &job_id).await;
 
@@ -333,54 +215,12 @@ async fn manual_rescan_should_not_resume_after_previous_success() {
     std::fs::create_dir_all(&photos_root).expect("create photos root");
     build_test_image(&photos_root.join("z_existing.jpg"));
 
-    let db_file = tmp.path().join("manual_rescan.db");
-    let database_url = format!("sqlite://{}", db_file.display());
-    let connect_opts = database_url
-        .parse::<SqliteConnectOptions>()
-        .expect("parse sqlite connect options")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(connect_opts)
-        .await
-        .expect("connect sqlite");
-    db::init_schema(&pool).await.expect("init schema");
+    let test_app = build_test_app(tmp.path(), "manual_rescan.db").await;
+    let app = test_app.app;
+    let pool_for_assert = test_app.pool;
 
-    let mut cfg = AppConfig::default();
-    cfg.scan.max_concurrent_jobs = 1;
-    cfg.scan.task_dispatch_interval_ms = 200;
-    let pool_for_assert = pool.clone();
-    let app = api::router(pool, cfg);
-
-    let create_source_resp = call_json(
-        &app,
-        Method::POST,
-        "/rpc/v1/sources",
-        Some(json!({
-            "name": "manual-rescan",
-            "root_path": photos_root.to_string_lossy(),
-            "source_type": "local_fs"
-        })),
-    )
-    .await;
-    assert_eq!(create_source_resp["code"], 0);
-    let source_id = create_source_resp["data"]["id"]
-        .as_str()
-        .expect("source id")
-        .to_string();
-
-    let first_trigger = call_json(
-        &app,
-        Method::POST,
-        &format!("/rpc/v1/sources/{}/scan", source_id),
-        Some(json!({})),
-    )
-    .await;
-    assert_eq!(first_trigger["code"], 0);
-    let first_job_id = first_trigger["data"]["job_id"]
-        .as_str()
-        .expect("job id")
-        .to_string();
+    let source_id = create_source(&app, "manual-rescan", &photos_root).await;
+    let first_job_id = trigger_scan(&app, &source_id).await;
     wait_scan_success(&app, &first_job_id).await;
 
     let persisted_cursor: Option<String> =
@@ -396,18 +236,7 @@ async fn manual_rescan_should_not_resume_after_previous_success() {
     );
 
     build_test_image(&photos_root.join("a_new_before_cursor.jpg"));
-    let second_trigger = call_json(
-        &app,
-        Method::POST,
-        &format!("/rpc/v1/sources/{}/scan", source_id),
-        Some(json!({})),
-    )
-    .await;
-    assert_eq!(second_trigger["code"], 0);
-    let second_job_id = second_trigger["data"]["job_id"]
-        .as_str()
-        .expect("job id")
-        .to_string();
+    let second_job_id = trigger_scan(&app, &source_id).await;
     wait_scan_success(&app, &second_job_id).await;
 
     let second_job = call_json(
@@ -440,62 +269,4 @@ async fn manual_rescan_should_not_resume_after_previous_success() {
         "manual rescan skipped the new file sorted before previous cursor: {}",
         search_resp
     );
-}
-
-async fn wait_scan_success(app: &axum::Router, job_id: &str) {
-    for _ in 0..50 {
-        let status_resp = call_json(
-            app,
-            Method::GET,
-            &format!("/rpc/v1/scan-jobs/{}", job_id),
-            None,
-        )
-        .await;
-        let status = status_resp["data"]["status"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-        if status == "success" {
-            return;
-        }
-        if status == "failed" || status == "cancelled" {
-            panic!("scan job ends in {}: {}", status, status_resp);
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
-    panic!("scan job not completed in time");
-}
-
-fn assert_close(actual: f64, expected: f64, tolerance: f64) {
-    assert!(
-        (actual - expected).abs() <= tolerance,
-        "expected {} within {} of {}, got {}",
-        actual,
-        tolerance,
-        expected,
-        actual
-    );
-}
-
-fn build_test_image(path: &Path) {
-    let img = ImageBuffer::from_pixel(640, 360, Rgb([240_u8, 240_u8, 240_u8]));
-    img.save(path).expect("save image");
-    let ft = FileTime::from_unix_time(1_580_513_600, 0);
-    set_file_mtime(path, ft).expect("set mtime");
-}
-
-async fn call_json(app: &axum::Router, method: Method, path: &str, body: Option<Value>) -> Value {
-    let payload = body.unwrap_or_else(|| json!({}));
-    let req = Request::builder()
-        .method(method)
-        .uri(path)
-        .header("content-type", "application/json")
-        .body(Body::from(payload.to_string()))
-        .expect("build request");
-
-    let response = app.clone().oneshot(req).await.expect("call route");
-    let bytes = to_bytes(response.into_body(), 5 * 1024 * 1024)
-        .await
-        .expect("read body");
-    serde_json::from_slice(&bytes).expect("parse json")
 }

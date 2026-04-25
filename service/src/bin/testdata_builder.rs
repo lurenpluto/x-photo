@@ -1,71 +1,63 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use std::io::Write;
 
-use chrono::{Datelike, NaiveDate, Weekday};
+use chrono::{Datelike, NaiveDate, Utc, Weekday};
 use filetime::{FileTime, set_file_mtime};
 use image::{ImageBuffer, Rgb};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use serde::Serialize;
+
+const USAGE: &str = "Usage: cargo run --bin testdata_builder -- <output_dir> [--strategy sample|family_us_weekends_small|family_us_weekends_medium|family_us_weekends_2025] [--year 2025] [--seed 42] [--clean] [--manifest <path>]";
+
+#[derive(Debug)]
+struct BuilderOptions {
+    output_dir: PathBuf,
+    strategy: String,
+    year: i32,
+    seed: u64,
+    clean: bool,
+    manifest_path: Option<PathBuf>,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!(
-            "Usage: cargo run --bin testdata_builder -- <output_dir> [--strategy family_us_weekends_2025] [--year 2025] [--seed 42]"
-        );
-        std::process::exit(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{USAGE}");
+        return Ok(());
     }
 
-    let output_dir = PathBuf::from(&args[1]);
-    std::fs::create_dir_all(&output_dir)?;
-
-    let mut strategy = "family_us_weekends_2025".to_string();
-    let mut year: i32 = 2025;
-    let mut seed: u64 = 42;
-
-    let mut idx = 2;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--strategy" if idx + 1 < args.len() => {
-                strategy = args[idx + 1].clone();
-                idx += 2;
-            }
-            "--year" if idx + 1 < args.len() => {
-                year = args[idx + 1].parse()?;
-                idx += 2;
-            }
-            "--seed" if idx + 1 < args.len() => {
-                seed = args[idx + 1].parse()?;
-                idx += 2;
-            }
-            _ => {
-                idx += 1;
-            }
-        }
-    }
-
-    let plans = match strategy.as_str() {
-        "family_us_weekends_2025" => build_family_us_weekend_plans(year, seed)?,
-        "sample" => build_sample_plans(),
-        other => {
-            return Err(format!("unknown strategy: {}", other).into());
+    let options = match parse_options(args) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("{message}\n\n{USAGE}");
+            std::process::exit(1);
         }
     };
+
+    if options.clean && options.output_dir.exists() {
+        std::fs::remove_dir_all(&options.output_dir)?;
+    }
+    std::fs::create_dir_all(&options.output_dir)?;
+
+    let plans = build_plans(&options.strategy, options.year, options.seed)?;
 
     let total = plans.len();
     println!(
         "planning completed: strategy={} year={} seed={} total_photos={}",
-        strategy, year, seed, total
+        options.strategy, options.year, options.seed, total
     );
 
     let started_at = Instant::now();
     let mut last_progress_at = started_at;
 
     let mut generated = 0_usize;
-    for plan in plans {
-        let dir_path = output_dir.join(&plan.album_dir_name);
+    let mut generated_photos = Vec::with_capacity(total);
+    for plan in &plans {
+        let dir_path = options.output_dir.join(&plan.album_dir_name);
         std::fs::create_dir_all(&dir_path)?;
         let file_path = dir_path.join(format!("{}.jpg", plan.marker));
 
@@ -74,6 +66,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let ft = FileTime::from_unix_time(plan.mtime_unix, 0);
         set_file_mtime(&file_path, ft)?;
+        generated_photos.push(GeneratedPhoto {
+            album_dir_name: plan.album_dir_name.clone(),
+            marker: plan.marker.clone(),
+            file_path: file_path.to_string_lossy().to_string(),
+            relative_path: format!("{}/{}.jpg", plan.album_dir_name, plan.marker),
+            exif: plan.exif.clone(),
+            mtime_unix: plan.mtime_unix,
+        });
         generated += 1;
 
         let now = Instant::now();
@@ -91,11 +91,83 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "test data generated at {} (strategy={}, photos={})",
-        output_dir.display(),
-        strategy,
+        options.output_dir.display(),
+        options.strategy,
         generated
     );
+
+    if let Some(manifest_path) = &options.manifest_path {
+        write_manifest(&options, generated_photos, manifest_path)?;
+        println!("manifest written to {}", manifest_path.display());
+    }
+
     Ok(())
+}
+
+fn parse_options(args: Vec<String>) -> Result<BuilderOptions, String> {
+    if args.is_empty() {
+        return Err("missing output_dir".to_string());
+    }
+
+    let output_dir = PathBuf::from(&args[0]);
+    let mut options = BuilderOptions {
+        output_dir,
+        strategy: "family_us_weekends_2025".to_string(),
+        year: 2025,
+        seed: 42,
+        clean: false,
+        manifest_path: None,
+    };
+
+    let mut idx = 1;
+    while idx < args.len() {
+        match args[idx].as_str() {
+            "--help" | "-h" => return Err("help requested".to_string()),
+            "--strategy" => {
+                options.strategy = parse_required_value(&args, idx, "--strategy")?.to_string();
+                idx += 2;
+            }
+            "--year" => {
+                let value = parse_required_value(&args, idx, "--year")?;
+                options.year = value
+                    .parse()
+                    .map_err(|e| format!("invalid --year value '{value}': {e}"))?;
+                idx += 2;
+            }
+            "--seed" => {
+                let value = parse_required_value(&args, idx, "--seed")?;
+                options.seed = value
+                    .parse()
+                    .map_err(|e| format!("invalid --seed value '{value}': {e}"))?;
+                idx += 2;
+            }
+            "--clean" => {
+                options.clean = true;
+                idx += 1;
+            }
+            "--manifest" => {
+                options.manifest_path = Some(PathBuf::from(parse_required_value(
+                    &args,
+                    idx,
+                    "--manifest",
+                )?));
+                idx += 2;
+            }
+            other => return Err(format!("unknown argument: {other}")),
+        }
+    }
+
+    Ok(options)
+}
+
+fn parse_required_value<'a>(args: &'a [String], idx: usize, flag: &str) -> Result<&'a str, String> {
+    let value = args
+        .get(idx + 1)
+        .ok_or_else(|| format!("{flag} requires a value"))?;
+    if value.starts_with("--") {
+        return Err(format!("{flag} requires a value"));
+    }
+    Ok(value)
 }
 
 fn render_progress(
@@ -149,11 +221,46 @@ struct PhotoPlan {
     mtime_unix: i64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 struct ExifMeta {
     date_time_original: String,
     gps_lat: Option<f64>,
     gps_lng: Option<f64>,
+}
+
+#[derive(Clone, Serialize)]
+struct GeneratedPhoto {
+    album_dir_name: String,
+    marker: String,
+    file_path: String,
+    relative_path: String,
+    exif: ExifMeta,
+    mtime_unix: i64,
+}
+
+#[derive(Serialize)]
+struct GeneratedManifest {
+    strategy: String,
+    year: i32,
+    seed: u64,
+    generated_at: String,
+    output_dir: String,
+    total_photos: usize,
+    albums: Vec<GeneratedAlbum>,
+    photos: Vec<GeneratedPhoto>,
+}
+
+#[derive(Serialize)]
+struct GeneratedAlbum {
+    album_dir_name: String,
+    photo_count: usize,
+}
+
+#[derive(Clone, Copy)]
+struct FamilyWeekendSpec {
+    max_weekends: Option<usize>,
+    min_photos_per_trip: u32,
+    max_photos_per_trip: u32,
 }
 
 #[derive(Clone)]
@@ -163,10 +270,91 @@ struct Park {
     lng: f64,
 }
 
-fn build_family_us_weekend_plans(
+fn build_plans(
+    strategy: &str,
     year: i32,
     seed: u64,
 ) -> Result<Vec<PhotoPlan>, Box<dyn std::error::Error>> {
+    match strategy {
+        "sample" => Ok(build_sample_plans()),
+        "family_us_weekends_small" => build_family_us_weekend_plans(
+            year,
+            seed,
+            FamilyWeekendSpec {
+                max_weekends: Some(4),
+                min_photos_per_trip: 3,
+                max_photos_per_trip: 6,
+            },
+        ),
+        "family_us_weekends_medium" => build_family_us_weekend_plans(
+            year,
+            seed,
+            FamilyWeekendSpec {
+                max_weekends: Some(12),
+                min_photos_per_trip: 8,
+                max_photos_per_trip: 16,
+            },
+        ),
+        "family_us_weekends_2025" | "family_us_weekends" => build_family_us_weekend_plans(
+            year,
+            seed,
+            FamilyWeekendSpec {
+                max_weekends: None,
+                min_photos_per_trip: 10,
+                max_photos_per_trip: 100,
+            },
+        ),
+        other => Err(format!("unknown strategy: {other}").into()),
+    }
+}
+
+fn write_manifest(
+    options: &BuilderOptions,
+    photos: Vec<GeneratedPhoto>,
+    manifest_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = manifest_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let mut album_counts = BTreeMap::new();
+    for photo in &photos {
+        *album_counts
+            .entry(photo.album_dir_name.clone())
+            .or_insert(0_usize) += 1;
+    }
+    let albums = album_counts
+        .into_iter()
+        .map(|(album_dir_name, photo_count)| GeneratedAlbum {
+            album_dir_name,
+            photo_count,
+        })
+        .collect();
+
+    let manifest = GeneratedManifest {
+        strategy: options.strategy.clone(),
+        year: options.year,
+        seed: options.seed,
+        generated_at: Utc::now().to_rfc3339(),
+        output_dir: options.output_dir.to_string_lossy().to_string(),
+        total_photos: photos.len(),
+        albums,
+        photos,
+    };
+    let bytes = serde_json::to_vec_pretty(&manifest)?;
+    std::fs::write(manifest_path, bytes)?;
+    Ok(())
+}
+
+fn build_family_us_weekend_plans(
+    year: i32,
+    seed: u64,
+    spec: FamilyWeekendSpec,
+) -> Result<Vec<PhotoPlan>, Box<dyn std::error::Error>> {
+    if spec.min_photos_per_trip > spec.max_photos_per_trip {
+        return Err("invalid family weekend photo count range".into());
+    }
+
     let parks = vec![
         Park {
             name: "Yellowstone.National.Park",
@@ -222,6 +410,7 @@ fn build_family_us_weekend_plans(
 
     let mut rng = StdRng::seed_from_u64(seed);
     let mut plans = Vec::new();
+    let mut weekend_count = 0_usize;
 
     let mut day =
         NaiveDate::from_ymd_opt(year, 1, 1).ok_or_else(|| format!("invalid year {}", year))?;
@@ -230,6 +419,12 @@ fn build_family_us_weekend_plans(
 
     while day <= end {
         if day.weekday() == Weekday::Sat {
+            if let Some(max_weekends) = spec.max_weekends
+                && weekend_count >= max_weekends
+            {
+                break;
+            }
+            weekend_count += 1;
             let park = parks[rng.gen_range(0..parks.len())].clone();
             let album_dir = format!(
                 "{:04}.{:02}.{:02}.{}",
@@ -239,7 +434,7 @@ fn build_family_us_weekend_plans(
                 park.name
             );
 
-            let photo_count = rng.gen_range(10..=100);
+            let photo_count = rng.gen_range(spec.min_photos_per_trip..=spec.max_photos_per_trip);
             let trip_lat_center = park.lat + rng.gen_range(-0.03_f64..0.03_f64);
             let trip_lng_center = park.lng + rng.gen_range(-0.03_f64..0.03_f64);
 

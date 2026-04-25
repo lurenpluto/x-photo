@@ -15,6 +15,25 @@ for p in path.split("."):
 print(json.dumps(cur, ensure_ascii=False) if isinstance(cur, (dict, list)) else cur)' "$path"
 }
 
+json_body() {
+  local kind="$1"
+  local value="$2"
+  python3 - "$kind" "$value" <<'PY'
+import json
+import sys
+
+kind = sys.argv[1]
+value = sys.argv[2]
+if kind == "create_source":
+    body = {"name": "smoke-local", "root_path": value, "source_type": "local_fs"}
+elif kind == "fs_watch":
+    body = {"changed_paths": [value]}
+else:
+    raise SystemExit(f"unknown json body kind: {kind}")
+print(json.dumps(body, ensure_ascii=False))
+PY
+}
+
 call_api() {
   local method="$1"
   local url="$2"
@@ -35,7 +54,7 @@ if [[ "$health_code" != "0" ]]; then
 fi
 
 echo "[2/8] create source"
-create_source_body="{\"name\":\"smoke-local\",\"root_path\":\"$DATA_DIR\",\"source_type\":\"local_fs\"}"
+create_source_body="$(json_body create_source "$DATA_DIR")"
 create_source_resp="$(call_api POST "$BASE_URL/sources" "$create_source_body")"
 create_source_code="$(printf '%s' "$create_source_resp" | json_get code)"
 if [[ "$create_source_code" != "0" ]]; then
@@ -95,7 +114,8 @@ if [[ "$overview_code" != "0" ]]; then
 fi
 
 echo "[7/8] trigger fs_watch scan"
-fs_watch_resp="$(call_api POST "$BASE_URL/sources/$source_id/scan:fs-watch" '{"changed_paths":["/tmp/xphoto_test_data"]}')"
+fs_watch_body="$(json_body fs_watch "$DATA_DIR")"
+fs_watch_resp="$(call_api POST "$BASE_URL/sources/$source_id/scan:fs-watch" "$fs_watch_body")"
 fs_watch_code="$(printf '%s' "$fs_watch_resp" | json_get code)"
 if [[ "$fs_watch_code" != "0" ]]; then
   echo "fs_watch trigger failed: $fs_watch_resp"
