@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use axum::body::{Body, to_bytes};
-use axum::http::{Method, Request};
+use axum::body::{Body, Bytes, to_bytes};
+use axum::http::{HeaderMap, Method, Request, StatusCode};
 use filetime::{FileTime, set_file_mtime};
 use image::{ImageBuffer, Rgb};
 use serde_json::{Value, json};
@@ -18,6 +18,13 @@ use tower::ServiceExt;
 pub struct TestApp {
     pub app: axum::Router,
     pub pool: SqlitePool,
+}
+
+/// Raw HTTP response captured from the in-memory router.
+pub struct TestHttpResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: Bytes,
 }
 
 /// Build a test app with scan settings tuned for deterministic integration tests.
@@ -62,6 +69,17 @@ pub async fn call_json(
     path: &str,
     body: Option<Value>,
 ) -> Value {
+    let response = call_http(app, method, path, body).await;
+    serde_json::from_slice(&response.body).expect("parse json")
+}
+
+/// Call the API through the in-memory router and keep status, headers and bytes.
+pub async fn call_http(
+    app: &axum::Router,
+    method: Method,
+    path: &str,
+    body: Option<Value>,
+) -> TestHttpResponse {
     let payload = body.unwrap_or_else(|| json!({}));
     let req = Request::builder()
         .method(method)
@@ -71,10 +89,16 @@ pub async fn call_json(
         .expect("build request");
 
     let response = app.clone().oneshot(req).await.expect("call route");
+    let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), 5 * 1024 * 1024)
         .await
         .expect("read body");
-    serde_json::from_slice(&bytes).expect("parse json")
+    TestHttpResponse {
+        status,
+        headers,
+        body: bytes,
+    }
 }
 
 /// Create a local filesystem source and return its id.

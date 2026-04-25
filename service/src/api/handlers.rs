@@ -2066,12 +2066,14 @@ pub async fn batch_add_to_album(
     for photo_id in &req.photo_ids {
         let result = sqlx::query(
             "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
-             VALUES (?, ?, NULL, ?)
+             SELECT ?, ?, NULL, ?
+             WHERE EXISTS (SELECT 1 FROM photos WHERE id = ? AND deleted_at IS NULL)
              ON CONFLICT(photo_id, album_id) DO NOTHING",
         )
         .bind(photo_id)
         .bind(req.album_id.trim())
         .bind(&now)
+        .bind(photo_id)
         .execute(&state.pool)
         .await
         .map_err(|err| {
@@ -2214,18 +2216,35 @@ pub async fn album_add_photos(
         return Err(bad_request("photo_ids 不能为空"));
     }
 
+    let album_exists: Option<String> = sqlx::query_scalar("SELECT id FROM albums WHERE id = ?")
+        .bind(&album_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|err| {
+            internal_db_error(
+                "album_add_photos.check_album",
+                json!({"album_id": album_id}),
+                err,
+            )
+        })?;
+    if album_exists.is_none() {
+        return Err(bad_request("album 不存在"));
+    }
+
     let now = Utc::now().to_rfc3339();
     let mut affected: i64 = 0;
     let mut first_added_photo_id: Option<String> = None;
     for photo_id in &req.photo_ids {
         let result = sqlx::query(
             "INSERT INTO photo_albums (photo_id, album_id, seq_no, created_at)
-             VALUES (?, ?, NULL, ?)
+             SELECT ?, ?, NULL, ?
+             WHERE EXISTS (SELECT 1 FROM photos WHERE id = ? AND deleted_at IS NULL)
              ON CONFLICT(photo_id, album_id) DO NOTHING",
         )
         .bind(photo_id)
         .bind(&album_id)
         .bind(&now)
+        .bind(photo_id)
         .execute(&state.pool)
         .await
         .map_err(|err| {
@@ -3673,6 +3692,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
             let mut touched_auto_album_ids: HashSet<String> = HashSet::new();
             let mut pending_index_new_photo_ids: HashSet<String> = HashSet::new();
             let mut pending_index_updated_photo_ids: HashSet<String> = HashSet::new();
+            let mut seen_storage_file_ids: HashSet<String> = HashSet::new();
             let mut last_scanned_path: Option<String> = None;
             let mut last_scanned_storage_file_id: Option<String> = None;
             let mut last_scanned_modified_at: Option<String> = None;
@@ -3694,7 +3714,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
             .await?;
 
             let existing_rows = sqlx::query(
-                "SELECT storage_file_id, modified_at_fs, content_hash
+                "SELECT id, storage_file_id, modified_at_fs, content_hash
                  FROM photos
                  WHERE source_id = ? AND deleted_at IS NULL",
             )
@@ -3713,6 +3733,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                 existing_by_storage.insert(
                     storage_file_id,
                     ExistingPhotoMeta {
+                        photo_id: row.get("id"),
                         modified_at_fs: row.get("modified_at_fs"),
                         content_hash: row.get("content_hash"),
                     },
@@ -3793,6 +3814,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                             continue;
                         }
                     };
+                    seen_storage_file_ids.insert(storage_file_id.clone());
 
                     let existing = existing_by_storage.get(&storage_file_id).cloned();
                     if existing.as_ref().and_then(|m| m.modified_at_fs.as_ref())
@@ -3990,6 +4012,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                             existing_by_storage.insert(
                                 candidate.storage_file_id.clone(),
                                 ExistingPhotoMeta {
+                                    photo_id: photo_id.clone(),
                                     modified_at_fs: candidate.modified_at_fs.clone(),
                                     content_hash: Some(candidate.content_hash.clone()),
                                 },
@@ -4102,6 +4125,39 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                     .collect::<Vec<_>>();
                 if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
                     warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining updated photos");
+                }
+            }
+
+            if !resume_enabled {
+                let missing_photo_ids = existing_by_storage
+                    .iter()
+                    .filter_map(|(storage_file_id, meta)| {
+                        if seen_storage_file_ids.contains(storage_file_id) {
+                            None
+                        } else {
+                            Some(meta.photo_id.clone())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if !missing_photo_ids.is_empty() {
+                    match mark_missing_photos_deleted(&pool, &source.id, &missing_photo_ids).await {
+                        Ok(deleted_count) => {
+                            updated_count += deleted_count;
+                            info!(
+                                job_id,
+                                source_id = source.id,
+                                deleted_count,
+                                "scan deletion sync completed"
+                            );
+                        }
+                        Err(e) => {
+                            failed_count += 1;
+                            error!(job_id, source_id = source.id, error = %e, "scan deletion sync failed");
+                            if first_error.is_none() {
+                                first_error = Some(e);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -4379,6 +4435,7 @@ struct ScannedPhotoCandidate {
 
 #[derive(Debug, Clone)]
 struct ExistingPhotoMeta {
+    photo_id: String,
     modified_at_fs: Option<String>,
     content_hash: Option<String>,
 }
@@ -5432,6 +5489,76 @@ async fn fetch_photo_ids_by_album(
             album_id, e
         )
     })
+}
+
+async fn mark_missing_photos_deleted(
+    pool: &SqlitePool,
+    source_id: &str,
+    photo_ids: &[String],
+) -> Result<i64, String> {
+    let now = Utc::now().to_rfc3339();
+    let mut deleted_count = 0_i64;
+    let mut affected_album_ids = HashSet::new();
+
+    for photo_id in photo_ids {
+        let album_ids = sqlx::query_scalar::<_, String>(
+            "SELECT album_id FROM photo_albums WHERE photo_id = ?",
+        )
+        .bind(photo_id)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to fetch albums before deletion sync (photo_id={}, source_id={}): {}",
+                photo_id, source_id, e
+            )
+        })?;
+
+        let result = sqlx::query(
+            "UPDATE photos
+             SET deleted_at = ?, updated_at = ?
+             WHERE id = ? AND source_id = ? AND deleted_at IS NULL",
+        )
+        .bind(&now)
+        .bind(&now)
+        .bind(photo_id)
+        .bind(source_id)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            format!(
+                "failed to mark missing photo deleted (photo_id={}, source_id={}): {}",
+                photo_id, source_id, e
+            )
+        })?;
+
+        if result.rows_affected() == 0 {
+            continue;
+        }
+
+        deleted_count += result.rows_affected() as i64;
+        for album_id in album_ids {
+            affected_album_ids.insert(album_id);
+        }
+
+        sqlx::query("DELETE FROM photo_favorites WHERE photo_id = ?")
+            .bind(photo_id)
+            .execute(pool)
+            .await
+            .map_err(|e| {
+                format!(
+                    "failed to delete favorite for missing photo (photo_id={}, source_id={}): {}",
+                    photo_id, source_id, e
+                )
+            })?;
+        remove_photo_search_index_for_photo(pool, photo_id).await?;
+    }
+
+    for album_id in affected_album_ids {
+        ensure_album_cover_valid(pool, &album_id).await?;
+    }
+
+    Ok(deleted_count)
 }
 
 async fn bootstrap_photo_search_index_if_needed(pool: &SqlitePool) -> Result<(), String> {
