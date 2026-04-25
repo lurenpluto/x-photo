@@ -6,9 +6,9 @@ SERVICE_DIR="$ROOT_DIR/service"
 WEB_DIR="$ROOT_DIR/web"
 
 SERVICE_HOST="${SERVICE_HOST:-127.0.0.1}"
-SERVICE_PORT="${SERVICE_PORT:-8080}"
+SERVICE_PORT="${SERVICE_PORT:-55080}"
 WEB_HOST="${WEB_HOST:-127.0.0.1}"
-WEB_PORT="${WEB_PORT:-5174}"
+WEB_PORT="${WEB_PORT:-55081}"
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "[x-photo] cargo not found. Please install Rust toolchain first."
@@ -24,15 +24,57 @@ else
   exit 1
 fi
 
-echo "[x-photo] Building service..."
-cargo build --manifest-path "$SERVICE_DIR/Cargo.toml"
-
 SERVICE_PID=""
 WEB_PID=""
 SERVICE_PID_FILE="$ROOT_DIR/.service.pid"
 WEB_PID_FILE="$ROOT_DIR/.web.pid"
 SERVICE_LOG="$ROOT_DIR/.service.log"
 WEB_LOG="$ROOT_DIR/.web.log"
+
+show_port_usage() {
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp "( sport = :$port )" 2>/dev/null || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null || true
+  else
+    echo "[x-photo] install ss or lsof to inspect the process using port $port"
+  fi
+}
+
+ensure_port_available() {
+  local name="$1"
+  local host="$2"
+  local port="$3"
+
+  if ! "$PYTHON_CMD" - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind((host, port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+  then
+    echo "[x-photo] $name port is already in use: $host:$port"
+    echo "[x-photo] Either stop that process or choose another port, for example:"
+    if [[ "$name" == "service" ]]; then
+      echo "  SERVICE_PORT=55082 ./start.sh"
+    else
+      echo "  WEB_PORT=55083 ./start.sh"
+    fi
+    echo "[x-photo] ---- listeners on port $port ----"
+    show_port_usage "$port"
+    exit 1
+  fi
+}
 
 show_log_tail() {
   local log_file="$1"
@@ -66,6 +108,12 @@ cleanup() {
 }
 
 trap cleanup EXIT INT TERM
+
+ensure_port_available "service" "$SERVICE_HOST" "$SERVICE_PORT"
+ensure_port_available "web" "$WEB_HOST" "$WEB_PORT"
+
+echo "[x-photo] Building service..."
+cargo build --manifest-path "$SERVICE_DIR/Cargo.toml"
 
 echo "[x-photo] Starting service on http://$SERVICE_HOST:$SERVICE_PORT ..."
 BIND_ADDR="$SERVICE_HOST:$SERVICE_PORT" cargo run --manifest-path "$SERVICE_DIR/Cargo.toml" --bin service >"$SERVICE_LOG" 2>&1 &

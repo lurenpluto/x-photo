@@ -49,9 +49,10 @@ Report: `doc/reports/scan_mutation_stress_mutation-stress-full2021.md`
 | Append 10 files and rescan | 3003 active, 25 deleted, 3003 FTS rows |
 | Cancel full stress scan under load | terminal status `cancelled` |
 | Retry after missing-root failure | first job `failed`, retry job `success`, 1 active photo |
+| In-scan delete/append and convergence | mutation job saw `failed_count=25`, next full rescan converged to 17212 active / API / FTS rows |
 
 ## Follow-Up
 
-1. Add a dedicated script for repeating selected matrix cases and computing min/mean/max throughput.
-2. Add true in-scan mutation cases: append/delete files while the scan is running, then verify the next full rescan converges.
+1. Decide whether files disappearing during an active scan should continue to count as `failed_count`, or whether they should be classified as a transient skipped/deleted condition.
+2. Add a dedicated script for repeating selected matrix cases and computing min/mean/max throughput.
 3. Preserve per-run service summary logs when a case fails or regresses, because the JSON report currently keeps the temp log path but the script cleans the process only after the run.

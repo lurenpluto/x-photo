@@ -33,6 +33,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--delete-count", type=int, default=25)
     parser.add_argument("--append-count", type=int, default=10)
     parser.add_argument("--cancel-delay-sec", type=float, default=0.2)
+    parser.add_argument("--in-scan-delete-count", type=int, default=25)
+    parser.add_argument("--in-scan-append-count", type=int, default=10)
+    parser.add_argument("--in-scan-mutation-delay-sec", type=float, default=0.1)
     return parser.parse_args()
 
 
@@ -166,6 +169,22 @@ class StressRunner:
             time.sleep(1)
         raise RuntimeError(f"scan job timeout for {label}: {last}")
 
+    def wait_job_running_or_terminal(
+        self, job_id: str, label: str, timeout_sec: int = 30
+    ) -> dict[str, object]:
+        deadline = time.monotonic() + timeout_sec
+        last: dict[str, object] | None = None
+        while time.monotonic() < deadline:
+            resp = self.call_api("GET", f"/scan-jobs/{job_id}")
+            self.write_response(f"job_{label}_pre_mutation", resp)
+            last = resp
+            if resp.get("code") == 0:
+                status = str(resp["data"]["status"])
+                if status in {"running", "success", "failed", "cancelled"}:
+                    return resp["data"]
+            time.sleep(0.2)
+        raise RuntimeError(f"scan job did not start for {label}: {last}")
+
     def search_total(self, source_id: str) -> int:
         resp = self.call_api(
             "POST",
@@ -294,6 +313,8 @@ class StressRunner:
         retry_metrics = self.source_metrics(retry_source_id)
         retry_api_total = self.search_total(retry_source_id)
 
+        in_scan_result = self.run_in_scan_mutation_case()
+
         expected_after_delete = baseline_count - delete_count
         expected_after_append = expected_after_delete + append_count
 
@@ -325,6 +346,7 @@ class StressRunner:
                 "api_total": retry_api_total,
                 "db": retry_metrics,
             },
+            "in_scan_mutation": in_scan_result,
             "global": self.global_metrics(),
         }
         self.checks = {
@@ -350,12 +372,99 @@ class StressRunner:
             "retry_counts_match": retry_metrics["active_photos"] == 1
             and retry_api_total == 1
             and retry_metrics["fts_rows"] == 1,
+            "in_scan_baseline_counts_match": in_scan_result["baseline"]["db"][
+                "active_photos"
+            ]
+            == in_scan_result["baseline_count"]
+            and in_scan_result["baseline"]["api_total"]
+            == in_scan_result["baseline_count"]
+            and in_scan_result["baseline"]["db"]["fts_rows"]
+            == in_scan_result["baseline_count"],
+            "in_scan_mutated_while_running": in_scan_result["pre_mutation_status"]
+            == "running",
+            "in_scan_mutation_job_success": in_scan_result["mutation_job"]["status"]
+            == "success",
+            "in_scan_converge_success": in_scan_result["converge_job"]["status"]
+            == "success",
+            "in_scan_converge_counts_match": in_scan_result["converged"]["db"][
+                "active_photos"
+            ]
+            == in_scan_result["expected_after_converge"]
+            and in_scan_result["converged"]["api_total"]
+            == in_scan_result["expected_after_converge"]
+            and in_scan_result["converged"]["db"]["deleted_photos"]
+            == in_scan_result["delete_count"]
+            and in_scan_result["converged"]["db"]["fts_rows"]
+            == in_scan_result["expected_after_converge"],
             "duplicate_storage_groups_zero": self.metrics["global"][
                 "duplicate_storage_groups"
             ]
             == 0,
         }
         return self.write_report()
+
+    def run_in_scan_mutation_case(self) -> dict[str, object]:
+        root = self.prepare_in_scan_mutation_data()
+        files = list_photos(root)
+        baseline_count = len(files)
+        delete_count = min(self.args.in_scan_delete_count, max(1, baseline_count // 20))
+        append_count = min(self.args.in_scan_append_count, max(1, baseline_count // 20))
+
+        source_id = self.create_source(f"in-scan-{self.args.label}", root)
+        baseline_job_id = self.trigger_scan(source_id, "in_scan_baseline")
+        baseline_job = self.wait_job(baseline_job_id, "in_scan_baseline")
+        baseline_metrics = self.source_metrics(source_id)
+        baseline_api_total = self.search_total(source_id)
+
+        mutation_job_id = self.trigger_scan(source_id, "in_scan_mutation")
+        pre_mutation = self.wait_job_running_or_terminal(
+            mutation_job_id, "in_scan_mutation"
+        )
+        if pre_mutation["status"] == "running":
+            time.sleep(self.args.in_scan_mutation_delay_sec)
+
+        delete_targets = files[:delete_count]
+        for path in delete_targets:
+            path.unlink(missing_ok=True)
+
+        append_dir = root / "_in_scan_append"
+        append_dir.mkdir(parents=True, exist_ok=True)
+        append_sources = [path for path in files if path not in set(delete_targets)]
+        for idx, src in enumerate(append_sources[:append_count], start=1):
+            shutil.copy2(src, append_dir / f"in_scan_appended_{idx:05d}{src.suffix.lower()}")
+
+        mutation_job = self.wait_job(mutation_job_id, "in_scan_mutation")
+        after_mutation_metrics = self.source_metrics(source_id)
+        after_mutation_api_total = self.search_total(source_id)
+
+        converge_job_id = self.trigger_scan(source_id, "in_scan_converge")
+        converge_job = self.wait_job(converge_job_id, "in_scan_converge")
+        converged_metrics = self.source_metrics(source_id)
+        converged_api_total = self.search_total(source_id)
+
+        return {
+            "source_id": source_id,
+            "baseline_count": baseline_count,
+            "delete_count": delete_count,
+            "append_count": append_count,
+            "expected_after_converge": baseline_count - delete_count + append_count,
+            "pre_mutation_status": pre_mutation["status"],
+            "baseline_job": baseline_job,
+            "mutation_job": mutation_job,
+            "converge_job": converge_job,
+            "baseline": {
+                "api_total": baseline_api_total,
+                "db": baseline_metrics,
+            },
+            "after_mutation_job": {
+                "api_total": after_mutation_api_total,
+                "db": after_mutation_metrics,
+            },
+            "converged": {
+                "api_total": converged_api_total,
+                "db": converged_metrics,
+            },
+        }
 
     def prepare_mutation_data(self) -> Path:
         src = Path(self.args.data_root) / self.args.scenario
@@ -364,6 +473,19 @@ class StressRunner:
         dst = self.run_dir / "mutation_data" / self.args.scenario
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(src, dst, copy_function=hardlink_or_copy)
+        return dst
+
+    def prepare_in_scan_mutation_data(self) -> Path:
+        src = Path(self.args.data_root)
+        if not src.is_dir():
+            raise RuntimeError(f"data root not found: {src}")
+        dst = self.run_dir / "in_scan_mutation_data"
+        shutil.copytree(
+            src,
+            dst,
+            copy_function=hardlink_or_copy,
+            ignore=shutil.ignore_patterns("_manifests"),
+        )
         return dst
 
     def write_report(self) -> dict[str, object]:
@@ -458,9 +580,28 @@ def render_markdown(report: dict[str, object]) -> str:
         f"| `retry_after_fix` | {retry['api_total']} | {retry_db['active_photos']} | "
         f"{retry_db['deleted_photos']} | {retry_db['fts_rows']} |"
     )
+    in_scan = metrics["in_scan_mutation"]
+    for phase, item in [
+        ("in_scan_baseline", in_scan["baseline"]),
+        ("in_scan_after_mutation_job", in_scan["after_mutation_job"]),
+        ("in_scan_converged", in_scan["converged"]),
+    ]:
+        db = item["db"]
+        lines.append(
+            f"| `{phase}` | {item['api_total']} | {db['active_photos']} | "
+            f"{db['deleted_photos']} | {db['fts_rows']} |"
+        )
 
     lines.extend(
         [
+            "",
+            "## In-Scan Mutation",
+            "",
+            f"- Pre-mutation observed job status: `{in_scan['pre_mutation_status']}`",
+            f"- Baseline photos: `{in_scan['baseline_count']}`",
+            f"- Deleted while scan was active: `{in_scan['delete_count']}`",
+            f"- Appended while scan was active: `{in_scan['append_count']}`",
+            f"- Expected after convergence: `{in_scan['expected_after_converge']}`",
             "",
             "## Jobs",
             "",

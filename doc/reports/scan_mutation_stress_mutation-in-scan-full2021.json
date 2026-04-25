@@ -1,0 +1,366 @@
+{
+  "label": "mutation-in-scan-full2021",
+  "generated_at": "2026-04-25T17:16:14Z",
+  "data_root": "/home/bucky/.xphoto/test_data",
+  "profile": "stress",
+  "scenario": "family-full-2021",
+  "base_url": "http://127.0.0.1:58131/rpc/v1",
+  "passed": true,
+  "checks": {
+    "initial_scan_success": true,
+    "initial_counts_match": true,
+    "delete_rescan_success": true,
+    "delete_counts_match": true,
+    "append_rescan_success": true,
+    "append_counts_match": true,
+    "cancel_under_load_reaches_cancelled": true,
+    "retry_initial_failure": true,
+    "retry_after_fix_success": true,
+    "retry_counts_match": true,
+    "in_scan_baseline_counts_match": true,
+    "in_scan_mutated_while_running": true,
+    "in_scan_mutation_job_success": true,
+    "in_scan_converge_success": true,
+    "in_scan_converge_counts_match": true,
+    "duplicate_storage_groups_zero": true
+  },
+  "metrics": {
+    "baseline_count": 3018,
+    "delete_count": 25,
+    "append_count": 10,
+    "expected_after_delete": 2993,
+    "expected_after_append": 3003,
+    "initial": {
+      "api_total": 3018,
+      "db": {
+        "active_photos": 3018,
+        "deleted_photos": 0,
+        "fts_rows": 3018,
+        "photo_albums": 3018
+      }
+    },
+    "after_delete": {
+      "api_total": 2993,
+      "db": {
+        "active_photos": 2993,
+        "deleted_photos": 25,
+        "fts_rows": 2993,
+        "photo_albums": 2993
+      }
+    },
+    "after_append": {
+      "api_total": 3003,
+      "db": {
+        "active_photos": 3003,
+        "deleted_photos": 25,
+        "fts_rows": 3003,
+        "photo_albums": 2993
+      }
+    },
+    "cancel": {
+      "cancel_response": {
+        "code": 0,
+        "message": "ok",
+        "data": {
+          "affected": 1
+        }
+      },
+      "job": {
+        "cancel_requested": true,
+        "error_message": "cancel requested while running",
+        "failed_count": 0,
+        "finished_at": "2026-04-25T17:15:50.424739871+00:00",
+        "id": "9803c6db782d1c09084eedcdf5dc4e3ae758c7b1f2a543ba48ae05baa90196e4",
+        "new_count": null,
+        "processed_count": 0,
+        "resume_cursor_path": null,
+        "source_id": "d283b5900e04d40a447c607e5a12ec49ee7b20e78dcbe9bcbe52da47592cffc9",
+        "started_at": "2026-04-25T17:15:50.223611476+00:00",
+        "status": "cancelled",
+        "total_count": 17227,
+        "trigger_type": "manual",
+        "updated_count": null
+      }
+    },
+    "retry": {
+      "failed_job": {
+        "cancel_requested": false,
+        "error_message": "failed to list source entries at /tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/retry_missing: io error: No such file or directory (os error 2)",
+        "failed_count": 1,
+        "finished_at": "2026-04-25T17:15:50.430464244+00:00",
+        "id": "f1289bb369adc70f74813c2f269bb634bdc630c4c6f2274b6259386323c96b3e",
+        "new_count": null,
+        "processed_count": 0,
+        "resume_cursor_path": null,
+        "source_id": "626eeddc3b9c700aa139719e2c6e315ab898c1e575538ae9464e2b3474cbac8f",
+        "started_at": "2026-04-25T17:15:50.430041110+00:00",
+        "status": "failed",
+        "total_count": null,
+        "trigger_type": "manual",
+        "updated_count": null
+      },
+      "retry_job": {
+        "cancel_requested": false,
+        "error_message": null,
+        "failed_count": 0,
+        "finished_at": "2026-04-25T17:15:51.439579030+00:00",
+        "id": "f382fdfd6be6cd221c812bf690b8a650d2977dca2accb49f1afa88dc5cb9a9fe",
+        "new_count": 1,
+        "processed_count": 1,
+        "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/retry_missing/retry_seed.jpg",
+        "source_id": "626eeddc3b9c700aa139719e2c6e315ab898c1e575538ae9464e2b3474cbac8f",
+        "started_at": "2026-04-25T17:15:51.435353070+00:00",
+        "status": "success",
+        "total_count": 1,
+        "trigger_type": "retry",
+        "updated_count": 0
+      },
+      "api_total": 1,
+      "db": {
+        "active_photos": 1,
+        "deleted_photos": 0,
+        "fts_rows": 1,
+        "photo_albums": 0
+      }
+    },
+    "in_scan_mutation": {
+      "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+      "baseline_count": 17227,
+      "delete_count": 25,
+      "append_count": 10,
+      "expected_after_converge": 17212,
+      "pre_mutation_status": "running",
+      "baseline_job": {
+        "cancel_requested": false,
+        "error_message": null,
+        "failed_count": 0,
+        "finished_at": "2026-04-25T17:16:11.748286633+00:00",
+        "id": "13dbc22c8bc3445c9ee16d36cf4ca101aa12488230e24eb9d67078ee2eb452f8",
+        "new_count": 17227,
+        "processed_count": 17227,
+        "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/sample/2020.02.01.Sample.Album/IMG_SAMPLE_001.jpg",
+        "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+        "started_at": "2026-04-25T17:15:52.615346077+00:00",
+        "status": "success",
+        "total_count": 17227,
+        "trigger_type": "manual",
+        "updated_count": 0
+      },
+      "mutation_job": {
+        "cancel_requested": false,
+        "error_message": "failed to get canonical_id for /tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/family-full-2020/2020.01.04.Zion.National.Park/IMG_20200104_001.jpg: io error: No such file or directory (os error 2)",
+        "failed_count": 25,
+        "finished_at": "2026-04-25T17:16:13.225602173+00:00",
+        "id": "e0baf6a57db1486386457d02c1fcd1e9fbd257dccfb97fbe2dadac188e2f81c4",
+        "new_count": 0,
+        "processed_count": 17227,
+        "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/sample/2020.02.01.Sample.Album/IMG_SAMPLE_001.jpg",
+        "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+        "started_at": "2026-04-25T17:16:12.716692209+00:00",
+        "status": "success",
+        "total_count": 17227,
+        "trigger_type": "manual",
+        "updated_count": 25
+      },
+      "converge_job": {
+        "cancel_requested": false,
+        "error_message": null,
+        "failed_count": 0,
+        "finished_at": "2026-04-25T17:16:14.240486146+00:00",
+        "id": "70084217478a22bb037a764e42477b4a9eb8b8172c7291f5091622d998502fa4",
+        "new_count": 10,
+        "processed_count": 17212,
+        "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/sample/2020.02.01.Sample.Album/IMG_SAMPLE_001.jpg",
+        "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+        "started_at": "2026-04-25T17:16:13.908322577+00:00",
+        "status": "success",
+        "total_count": 17212,
+        "trigger_type": "manual",
+        "updated_count": 0
+      },
+      "baseline": {
+        "api_total": 17227,
+        "db": {
+          "active_photos": 17227,
+          "deleted_photos": 0,
+          "fts_rows": 17227,
+          "photo_albums": 17227
+        }
+      },
+      "after_mutation_job": {
+        "api_total": 17202,
+        "db": {
+          "active_photos": 17202,
+          "deleted_photos": 25,
+          "fts_rows": 17202,
+          "photo_albums": 17202
+        }
+      },
+      "converged": {
+        "api_total": 17212,
+        "db": {
+          "active_photos": 17212,
+          "deleted_photos": 25,
+          "fts_rows": 17212,
+          "photo_albums": 17202
+        }
+      }
+    },
+    "global": {
+      "sources": 4,
+      "active_photos": 20408,
+      "deleted_photos": 50,
+      "fts_rows": 20216,
+      "duplicate_storage_groups": 0
+    }
+  },
+  "jobs": {
+    "mutation_initial": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:15:47.164309914+00:00",
+      "id": "06fe1442cd403c1058e9c25007f3fcb8da8a13738c44434141212b097c3ef33a",
+      "new_count": 3018,
+      "processed_count": 3018,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/mutation_data/family-full-2021/2021.12.25.Acadia.National.Park/IMG_20211225_053.jpg",
+      "source_id": "e398bf4b46d6ca017c1213d804e90baad9fd6d1a2781b0626fb834fad7bbbad4",
+      "started_at": "2026-04-25T17:15:44.152208168+00:00",
+      "status": "success",
+      "total_count": 3018,
+      "trigger_type": "manual",
+      "updated_count": 0
+    },
+    "mutation_delete": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:15:48.269682085+00:00",
+      "id": "6f2f34ea58042a90ace65e7c0ba6447f87c9047e6b16af70c4b3a870f5c5f3f8",
+      "new_count": 0,
+      "processed_count": 2993,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/mutation_data/family-full-2021/2021.12.25.Acadia.National.Park/IMG_20211225_053.jpg",
+      "source_id": "e398bf4b46d6ca017c1213d804e90baad9fd6d1a2781b0626fb834fad7bbbad4",
+      "started_at": "2026-04-25T17:15:48.173376490+00:00",
+      "status": "success",
+      "total_count": 2993,
+      "trigger_type": "manual",
+      "updated_count": 25
+    },
+    "mutation_append": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:15:49.275008652+00:00",
+      "id": "fd1542f7eca9373864f2fb29e5429a91ea5a5fbc9c0fd961411fc3bacb92edb3",
+      "new_count": 10,
+      "processed_count": 3003,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/mutation_data/family-full-2021/_mutation_append/appended_00010.jpg",
+      "source_id": "e398bf4b46d6ca017c1213d804e90baad9fd6d1a2781b0626fb834fad7bbbad4",
+      "started_at": "2026-04-25T17:15:49.206737407+00:00",
+      "status": "success",
+      "total_count": 3003,
+      "trigger_type": "manual",
+      "updated_count": 0
+    },
+    "cancel_load": {
+      "cancel_requested": true,
+      "error_message": "cancel requested while running",
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:15:50.424739871+00:00",
+      "id": "9803c6db782d1c09084eedcdf5dc4e3ae758c7b1f2a543ba48ae05baa90196e4",
+      "new_count": null,
+      "processed_count": 0,
+      "resume_cursor_path": null,
+      "source_id": "d283b5900e04d40a447c607e5a12ec49ee7b20e78dcbe9bcbe52da47592cffc9",
+      "started_at": "2026-04-25T17:15:50.223611476+00:00",
+      "status": "cancelled",
+      "total_count": 17227,
+      "trigger_type": "manual",
+      "updated_count": null
+    },
+    "retry_missing_initial": {
+      "cancel_requested": false,
+      "error_message": "failed to list source entries at /tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/retry_missing: io error: No such file or directory (os error 2)",
+      "failed_count": 1,
+      "finished_at": "2026-04-25T17:15:50.430464244+00:00",
+      "id": "f1289bb369adc70f74813c2f269bb634bdc630c4c6f2274b6259386323c96b3e",
+      "new_count": null,
+      "processed_count": 0,
+      "resume_cursor_path": null,
+      "source_id": "626eeddc3b9c700aa139719e2c6e315ab898c1e575538ae9464e2b3474cbac8f",
+      "started_at": "2026-04-25T17:15:50.430041110+00:00",
+      "status": "failed",
+      "total_count": null,
+      "trigger_type": "manual",
+      "updated_count": null
+    },
+    "retry_missing": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:15:51.439579030+00:00",
+      "id": "f382fdfd6be6cd221c812bf690b8a650d2977dca2accb49f1afa88dc5cb9a9fe",
+      "new_count": 1,
+      "processed_count": 1,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/retry_missing/retry_seed.jpg",
+      "source_id": "626eeddc3b9c700aa139719e2c6e315ab898c1e575538ae9464e2b3474cbac8f",
+      "started_at": "2026-04-25T17:15:51.435353070+00:00",
+      "status": "success",
+      "total_count": 1,
+      "trigger_type": "retry",
+      "updated_count": 0
+    },
+    "in_scan_baseline": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:16:11.748286633+00:00",
+      "id": "13dbc22c8bc3445c9ee16d36cf4ca101aa12488230e24eb9d67078ee2eb452f8",
+      "new_count": 17227,
+      "processed_count": 17227,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/sample/2020.02.01.Sample.Album/IMG_SAMPLE_001.jpg",
+      "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+      "started_at": "2026-04-25T17:15:52.615346077+00:00",
+      "status": "success",
+      "total_count": 17227,
+      "trigger_type": "manual",
+      "updated_count": 0
+    },
+    "in_scan_mutation": {
+      "cancel_requested": false,
+      "error_message": "failed to get canonical_id for /tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/family-full-2020/2020.01.04.Zion.National.Park/IMG_20200104_001.jpg: io error: No such file or directory (os error 2)",
+      "failed_count": 25,
+      "finished_at": "2026-04-25T17:16:13.225602173+00:00",
+      "id": "e0baf6a57db1486386457d02c1fcd1e9fbd257dccfb97fbe2dadac188e2f81c4",
+      "new_count": 0,
+      "processed_count": 17227,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/sample/2020.02.01.Sample.Album/IMG_SAMPLE_001.jpg",
+      "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+      "started_at": "2026-04-25T17:16:12.716692209+00:00",
+      "status": "success",
+      "total_count": 17227,
+      "trigger_type": "manual",
+      "updated_count": 25
+    },
+    "in_scan_converge": {
+      "cancel_requested": false,
+      "error_message": null,
+      "failed_count": 0,
+      "finished_at": "2026-04-25T17:16:14.240486146+00:00",
+      "id": "70084217478a22bb037a764e42477b4a9eb8b8172c7291f5091622d998502fa4",
+      "new_count": 10,
+      "processed_count": 17212,
+      "resume_cursor_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/in_scan_mutation_data/sample/2020.02.01.Sample.Album/IMG_SAMPLE_001.jpg",
+      "source_id": "68f0f9104dc8ca093c541f1757fe599103cb0dffaadde3e6c8802bd07fa0e96d",
+      "started_at": "2026-04-25T17:16:13.908322577+00:00",
+      "status": "success",
+      "total_count": 17212,
+      "trigger_type": "manual",
+      "updated_count": 0
+    }
+  },
+  "db_path": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/mutation.db",
+  "log_dir": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz/logs",
+  "run_dir": "/tmp/xphoto_scan_mutation_mutation-in-scan-full2021.6a4nr8zz"
+}

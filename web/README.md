@@ -30,7 +30,7 @@ start.bat
 - Windows PowerShell: `.\stop.ps1`
 - Windows CMD: `stop.bat`
 
-默认地址：Web `http://127.0.0.1:5174`，API `http://127.0.0.1:8080/rpc/v1`。
+默认地址：Web `http://127.0.0.1:55081`，API `http://127.0.0.1:55080/rpc/v1`。
 
 可通过环境变量覆盖：`SERVICE_HOST`、`SERVICE_PORT`、`WEB_HOST`、`WEB_PORT`。
 
@@ -54,7 +54,7 @@ python -m http.server 5174
 
 `http://127.0.0.1:5174`
 
-页面默认 API Base 为 `http://127.0.0.1:8080/rpc/v1`，可在页面右上角改成任意地址。
+页面默认 API Base 为 `http://127.0.0.1:55080/rpc/v1`，可在页面右上角改成任意地址。
 
 当前默认仅本机访问（后端监听 `127.0.0.1:8080`）。若后续要开放外部访问，请先补齐认证与安全策略，再通过 `BIND_ADDR` 调整监听地址。
 

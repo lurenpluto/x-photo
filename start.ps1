@@ -93,9 +93,9 @@ $serviceManifest = Join-Path $rootDir "service/Cargo.toml"
 $webDir = Join-Path $rootDir "web"
 
 $serviceHost = Get-EnvOrDefault -Name "SERVICE_HOST" -Default "127.0.0.1"
-$servicePort = Get-EnvOrDefault -Name "SERVICE_PORT" -Default "8080"
+$servicePort = Get-EnvOrDefault -Name "SERVICE_PORT" -Default "55080"
 $webHost = Get-EnvOrDefault -Name "WEB_HOST" -Default "127.0.0.1"
-$webPort = Get-EnvOrDefault -Name "WEB_PORT" -Default "5174"
+$webPort = Get-EnvOrDefault -Name "WEB_PORT" -Default "55081"
 
 $cargo = Get-Command cargo -ErrorAction SilentlyContinue
 if (-not $cargo) {
@@ -133,9 +133,11 @@ $webPidFile = Join-Path $rootDir ".web.pid"
 
 $serviceProc = $null
 $webProc = $null
+$oldBindAddr = [Environment]::GetEnvironmentVariable("BIND_ADDR")
 
 try {
   Write-Host "[x-photo] Starting service on http://$serviceHost`:$servicePort ..."
+  $env:BIND_ADDR = "$serviceHost`:$servicePort"
   $serviceProc = Start-Process -FilePath "cargo" -ArgumentList @("run", "--manifest-path", $serviceManifest, "--bin", "service") -WorkingDirectory $rootDir -RedirectStandardOutput $serviceLog -RedirectStandardError $serviceErrLog -PassThru
   Set-Content -Path $servicePidFile -Value $serviceProc.Id -NoNewline
 
@@ -169,5 +171,10 @@ finally {
   }
   if (Test-Path $webPidFile) {
     Remove-Item $webPidFile -Force
+  }
+  if ([string]::IsNullOrEmpty($oldBindAddr)) {
+    Remove-Item Env:BIND_ADDR -ErrorAction SilentlyContinue
+  } else {
+    $env:BIND_ADDR = $oldBindAddr
   }
 }

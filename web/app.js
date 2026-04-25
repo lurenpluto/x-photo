@@ -3,8 +3,18 @@ import { createAlbumView } from "./views/albumView.js";
 import { createPhotoView } from "./views/photoView.js";
 import { createTaskView } from "./views/taskView.js";
 
+const DEFAULT_API_BASE = "http://127.0.0.1:55080/rpc/v1";
+const LEGACY_DEFAULT_API_BASE = "http://127.0.0.1:8080/rpc/v1";
+
+const savedApiBase = localStorage.getItem("xphoto_api_base");
+const initialApiBase =
+  !savedApiBase || savedApiBase === LEGACY_DEFAULT_API_BASE ? DEFAULT_API_BASE : savedApiBase;
+if (savedApiBase === LEGACY_DEFAULT_API_BASE) {
+  localStorage.setItem("xphoto_api_base", DEFAULT_API_BASE);
+}
+
 const state = {
-  apiBase: localStorage.getItem("xphoto_api_base") || "http://127.0.0.1:8080/rpc/v1",
+  apiBase: initialApiBase,
   tab: "photos",
   albums: [],
   albumPhotoCounts: {},
