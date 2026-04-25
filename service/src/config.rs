@@ -137,7 +137,7 @@ impl Default for AppConfig {
                 resume_enabled: true,
                 task_dispatch_interval_ms: 2000,
                 task_stale_seconds: 120,
-                source_change_detect_enabled: true,
+                source_change_detect_enabled: false,
                 source_change_detect_interval_ms: 30000,
             },
             album_rules: AlbumRulesConfig {
@@ -221,7 +221,7 @@ impl Default for ScanConfig {
             resume_enabled: true,
             task_dispatch_interval_ms: 2000,
             task_stale_seconds: 120,
-            source_change_detect_enabled: true,
+            source_change_detect_enabled: false,
             source_change_detect_interval_ms: 30000,
         }
     }
@@ -628,7 +628,7 @@ hash_batch_size = 32
 resume_enabled = true
 task_dispatch_interval_ms = 2000
 task_stale_seconds = 120
-source_change_detect_enabled = true
+source_change_detect_enabled = false
 source_change_detect_interval_ms = 30000
 
 [album_rules]
@@ -638,4 +638,28 @@ date_delimiters = [".", "_", "-"]
 
     std::fs::write(path, default_text)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_change_detect_should_be_opt_in_by_default() {
+        assert!(!AppConfig::default().scan.source_change_detect_enabled);
+        assert!(!ScanConfig::default().source_change_detect_enabled);
+    }
+
+    #[test]
+    fn generated_default_config_should_keep_source_change_detect_disabled() {
+        let tmp = tempfile::TempDir::new().expect("temp dir");
+        let path = tmp.path().join("config.toml");
+        ensure_default_config(&path, &path).expect("write default config");
+
+        let content = std::fs::read_to_string(&path).expect("read default config");
+        assert!(content.contains("source_change_detect_enabled = false"));
+
+        let parsed: AppConfig = toml::from_str(&content).expect("parse default config");
+        assert!(!parsed.scan.source_change_detect_enabled);
+    }
 }

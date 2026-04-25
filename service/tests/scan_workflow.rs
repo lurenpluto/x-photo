@@ -311,6 +311,122 @@ async fn generated_sample_data_should_scan_exif_and_album() {
     );
 }
 
+#[tokio::test]
+async fn manual_rescan_should_not_resume_after_previous_success() {
+    let tmp = TempDir::new().expect("temp dir");
+    let photos_root = tmp.path().join("photos");
+    std::fs::create_dir_all(&photos_root).expect("create photos root");
+    build_test_image(&photos_root.join("z_existing.jpg"));
+
+    let db_file = tmp.path().join("manual_rescan.db");
+    let database_url = format!("sqlite://{}", db_file.display());
+    let connect_opts = database_url
+        .parse::<SqliteConnectOptions>()
+        .expect("parse sqlite connect options")
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(connect_opts)
+        .await
+        .expect("connect sqlite");
+    db::init_schema(&pool).await.expect("init schema");
+
+    let mut cfg = AppConfig::default();
+    cfg.scan.max_concurrent_jobs = 1;
+    cfg.scan.task_dispatch_interval_ms = 200;
+    let pool_for_assert = pool.clone();
+    let app = api::router(pool, cfg);
+
+    let create_source_resp = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/sources",
+        Some(json!({
+            "name": "manual-rescan",
+            "root_path": photos_root.to_string_lossy(),
+            "source_type": "local_fs"
+        })),
+    )
+    .await;
+    assert_eq!(create_source_resp["code"], 0);
+    let source_id = create_source_resp["data"]["id"]
+        .as_str()
+        .expect("source id")
+        .to_string();
+
+    let first_trigger = call_json(
+        &app,
+        Method::POST,
+        &format!("/rpc/v1/sources/{}/scan", source_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(first_trigger["code"], 0);
+    let first_job_id = first_trigger["data"]["job_id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+    wait_scan_success(&app, &first_job_id).await;
+
+    let persisted_cursor: Option<String> =
+        sqlx::query_scalar("SELECT last_scanned_path FROM source_scan_states WHERE source_id = ?")
+            .bind(&source_id)
+            .fetch_optional(&pool_for_assert)
+            .await
+            .expect("query source scan state")
+            .flatten();
+    assert_eq!(
+        persisted_cursor, None,
+        "successful scans should not leave a source-level resume cursor"
+    );
+
+    build_test_image(&photos_root.join("a_new_before_cursor.jpg"));
+    let second_trigger = call_json(
+        &app,
+        Method::POST,
+        &format!("/rpc/v1/sources/{}/scan", source_id),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(second_trigger["code"], 0);
+    let second_job_id = second_trigger["data"]["job_id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+    wait_scan_success(&app, &second_job_id).await;
+
+    let second_job = call_json(
+        &app,
+        Method::GET,
+        &format!("/rpc/v1/scan-jobs/{}", second_job_id),
+        None,
+    )
+    .await;
+    assert_eq!(second_job["code"], 0);
+    assert_eq!(second_job["data"]["total_count"], 2);
+    assert_eq!(second_job["data"]["new_count"], 1);
+
+    let search_resp = call_json(
+        &app,
+        Method::POST,
+        "/rpc/v1/photos/search",
+        Some(json!({"page": 1, "page_size": 20})),
+    )
+    .await;
+    assert_eq!(search_resp["code"], 0);
+    assert_eq!(search_resp["data"]["total"], 2);
+    let items = search_resp["data"]["items"]
+        .as_array()
+        .expect("search items");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["file_name"] == "a_new_before_cursor.jpg"),
+        "manual rescan skipped the new file sorted before previous cursor: {}",
+        search_resp
+    );
+}
+
 async fn wait_scan_success(app: &axum::Router, job_id: &str) {
     for _ in 0..50 {
         let status_resp = call_json(

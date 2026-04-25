@@ -2527,20 +2527,41 @@ async fn detect_source_changes_and_schedule_incremental_scans(
     .await
     .map_err(|e| format!("failed to load sources for change detect: {}", e))?;
 
-    let adapter = LocalFsAdapter::new(state.config.storage.allow_delete);
     let mut live_source_ids = HashSet::new();
 
     for source in sources {
         live_source_ids.insert(source.id.clone());
-        let entries = match adapter.list_entries(&source.root_path) {
-            Ok(entries) => entries,
-            Err(e) => {
+        let source_id = source.id.clone();
+        let source_root = source.root_path.clone();
+        let allow_delete = state.config.storage.allow_delete;
+        let detect_started_at = Instant::now();
+        let entries = match tokio::task::spawn_blocking(move || {
+            let adapter = LocalFsAdapter::new(allow_delete);
+            adapter
+                .list_entries(&source_root)
+                .map_err(|e| format!("{}", e))
+        })
+        .await
+        {
+            Ok(Ok(entries)) => entries,
+            Ok(Err(e)) => {
                 warn!(source_id = source.id, root_path = source.root_path, error = %e, "source change detect skipped due to list_entries error");
+                continue;
+            }
+            Err(e) => {
+                warn!(source_id = source.id, root_path = source.root_path, error = %e, "source change detect list_entries task failed");
                 continue;
             }
         };
 
         let fingerprint = build_source_fingerprint(&entries);
+        info!(
+            source_id,
+            root_path = source.root_path,
+            entry_count = entries.len(),
+            elapsed_ms = detect_started_at.elapsed().as_millis(),
+            "source change detect fingerprint completed"
+        );
         if let Some(prev) = source_fingerprints.get(&source.id) {
             if prev != &fingerprint {
                 schedule_incremental_fs_watch_scan(state.clone(), &source, prev, &fingerprint).await?;
@@ -3111,7 +3132,7 @@ async fn enqueue_scan_job(
     let search_index_sync_every = state.config.scan.search_index_sync_every.max(1);
     let hash_parallelism = state.config.scan.hash_parallelism;
     let hash_batch_size = state.config.scan.hash_batch_size.max(1);
-    let resume_enabled = state.config.scan.resume_enabled;
+    let resume_enabled = state.config.scan.resume_enabled && trigger_type == TRIGGER_RETRY;
     let preview_cache = state.config.preview_cache.clone();
     let preview_warmup_limiter = state.preview_warmup_limiter.clone();
     let album_rule_patterns = if state.config.album_rules.enabled {
@@ -4039,10 +4060,10 @@ async fn run_scan_job(
                 "success",
                 Some(&running_at),
                 Some(&finished_at),
-                last_scanned_path.as_deref(),
-                last_scanned_storage_file_id.as_deref(),
-                last_scanned_modified_at.as_deref(),
-                last_scanned_content_hash.as_deref(),
+                None,
+                None,
+                None,
+                None,
                 first_error.as_deref(),
             )
             .await?;
