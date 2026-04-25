@@ -340,7 +340,7 @@ pub async fn cancel_scan_job(
 ) -> Result<Json<ApiResponse<BatchOperationResult>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!(job_id, "cancel_scan_job requested");
 
-    let row = sqlx::query("SELECT source_id, status FROM scan_jobs WHERE id = ?")
+    let row = sqlx::query("SELECT source_id, status, started_at FROM scan_jobs WHERE id = ?")
         .bind(&job_id)
         .fetch_optional(&state.pool)
         .await
@@ -349,6 +349,7 @@ pub async fn cancel_scan_job(
 
     let source_id: String = row.get("source_id");
     let status: String = row.get("status");
+    let started_at: Option<String> = row.get("started_at");
     let now = Utc::now().to_rfc3339();
 
     if status == STATUS_PENDING {
@@ -400,19 +401,27 @@ pub async fn cancel_scan_job(
     }
 
     if status == STATUS_RUNNING {
-        let result = sqlx::query("UPDATE scan_jobs SET cancel_requested = 1 WHERE id = ?")
-            .bind(&job_id)
-            .execute(&state.pool)
-            .await
-            .map_err(|err| {
-                internal_db_error(
-                    "cancel_scan_job.request_running",
-                    json!({"job_id": job_id}),
-                    err,
-                )
-            })?;
+        let affected = mark_running_scan_cancelled(
+            &state.pool,
+            &job_id,
+            &source_id,
+            started_at.as_deref(),
+            &now,
+            "cancel requested while running",
+        )
+        .await
+        .map_err(|msg| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    code: 500,
+                    message: msg,
+                    data: json!({}),
+                }),
+            )
+        })?;
         return Ok(Json(ApiResponse::ok(BatchOperationResult {
-            affected: result.rows_affected() as i64,
+            affected: affected as i64,
         })));
     }
 
@@ -667,21 +676,23 @@ pub async fn cancel_task_job(
 
     let linked_scan_job_id: Option<String> = task_row.get("scan_job_id");
     if let Some(scan_job_id) = linked_scan_job_id {
-        let scan_row = sqlx::query("SELECT source_id, status FROM scan_jobs WHERE id = ?")
-            .bind(&scan_job_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(|err| {
-                internal_db_error(
-                    "cancel_task_job.fetch_scan",
-                    json!({"job_id": job_id, "scan_job_id": scan_job_id}),
-                    err,
-                )
-            })?;
+        let scan_row =
+            sqlx::query("SELECT source_id, status, started_at FROM scan_jobs WHERE id = ?")
+                .bind(&scan_job_id)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|err| {
+                    internal_db_error(
+                        "cancel_task_job.fetch_scan",
+                        json!({"job_id": job_id, "scan_job_id": scan_job_id}),
+                        err,
+                    )
+                })?;
 
         if let Some(scan_row) = scan_row {
             let source_id: String = scan_row.get("source_id");
             let scan_status: String = scan_row.get("status");
+            let scan_started_at: Option<String> = scan_row.get("started_at");
             let now = Utc::now().to_rfc3339();
 
             if scan_status == STATUS_PENDING {
@@ -727,17 +738,25 @@ pub async fn cancel_task_job(
                     )
                 })?;
             } else if scan_status == STATUS_RUNNING {
-                sqlx::query("UPDATE scan_jobs SET cancel_requested = 1 WHERE id = ?")
-                    .bind(&scan_job_id)
-                    .execute(&state.pool)
-                    .await
-                    .map_err(|err| {
-                        internal_db_error(
-                            "cancel_task_job.request_scan_running",
-                            json!({"job_id": job_id, "scan_job_id": scan_job_id}),
-                            err,
-                        )
-                    })?;
+                mark_running_scan_cancelled(
+                    &state.pool,
+                    &scan_job_id,
+                    &source_id,
+                    scan_started_at.as_deref(),
+                    &now,
+                    "cancelled by task api",
+                )
+                .await
+                .map_err(|msg| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse {
+                            code: 500,
+                            message: msg,
+                            data: json!({}),
+                        }),
+                    )
+                })?;
             }
         }
     }
@@ -3140,6 +3159,61 @@ async fn is_cancel_requested(pool: &SqlitePool, job_id: &str) -> Result<bool, St
     Ok(flag.unwrap_or(0) == 1)
 }
 
+async fn mark_running_scan_cancelled(
+    pool: &SqlitePool,
+    job_id: &str,
+    source_id: &str,
+    started_at: Option<&str>,
+    finished_at: &str,
+    message: &str,
+) -> Result<u64, String> {
+    let result = sqlx::query(
+        "UPDATE scan_jobs
+         SET status = 'cancelled', cancel_requested = 1, finished_at = ?, error_message = ?
+         WHERE id = ? AND status = 'running'",
+    )
+    .bind(finished_at)
+    .bind(message)
+    .bind(job_id)
+    .execute(pool)
+    .await
+    .map_err(|e| {
+        let msg = format!(
+            "failed to switch scan job {} status running->cancelled for source {}: {}",
+            job_id, source_id, e
+        );
+        error!("{}", msg);
+        msg
+    })?;
+
+    let affected = result.rows_affected();
+    if affected > 0 {
+        upsert_source_scan_state(
+            pool,
+            source_id,
+            STATUS_CANCELLED,
+            started_at,
+            Some(finished_at),
+            None,
+            None,
+            None,
+            None,
+            Some(message),
+        )
+        .await?;
+
+        info!(
+            job_id,
+            source_id,
+            from = "running",
+            to = "cancelled",
+            "scan job status transition"
+        );
+    }
+
+    Ok(affected)
+}
+
 async fn update_scan_checkpoint(
     pool: &SqlitePool,
     job_id: &str,
@@ -3854,24 +3928,10 @@ async fn run_scan_job(
 
             let finished_at = Utc::now().to_rfc3339();
 
-            upsert_source_scan_state(
-                &pool,
-                &source.id,
-                "success",
-                Some(&running_at),
-                Some(&finished_at),
-                last_scanned_path.as_deref(),
-                last_scanned_storage_file_id.as_deref(),
-                last_scanned_modified_at.as_deref(),
-                last_scanned_content_hash.as_deref(),
-                first_error.as_deref(),
-            )
-            .await?;
-
-            sqlx::query(
+            let success_result = sqlx::query(
                 "UPDATE scan_jobs
                  SET status = 'success', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
-                 WHERE id = ?",
+                 WHERE id = ? AND status = 'running' AND cancel_requested = 0",
             )
             .bind(&finished_at)
             .bind(processed_count)
@@ -3892,6 +3952,100 @@ async fn run_scan_job(
                 error!("{}", msg);
                 msg
             })?;
+
+            if success_result.rows_affected() == 0 {
+                let latest = sqlx::query(
+                    "SELECT status, cancel_requested FROM scan_jobs WHERE id = ?",
+                )
+                    .bind(&job_id)
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "failed to inspect scan job {} after skipped success transition: {}",
+                            job_id, e
+                        )
+                    })?;
+
+                let latest_status = latest
+                    .as_ref()
+                    .map(|row| row.get::<String, _>("status"))
+                    .unwrap_or_else(|| "<missing>".to_string());
+                let latest_cancel_requested = latest
+                    .as_ref()
+                    .map(|row| row.get::<i64, _>("cancel_requested") == 1)
+                    .unwrap_or(false);
+
+                if latest_status == STATUS_RUNNING && latest_cancel_requested {
+                    sqlx::query(
+                        "UPDATE scan_jobs
+                         SET status = 'cancelled', finished_at = ?, processed_count = ?, resume_cursor_path = ?, total_count = ?, new_count = ?, updated_count = ?, failed_count = ?, error_message = ?
+                         WHERE id = ? AND status = 'running'",
+                    )
+                    .bind(&finished_at)
+                    .bind(processed_count)
+                    .bind(last_scanned_path.as_deref())
+                    .bind(total_count)
+                    .bind(new_count)
+                    .bind(updated_count)
+                    .bind(failed_count)
+                    .bind("cancel requested before success commit")
+                    .bind(&job_id)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "failed to switch scan job {} status running->cancelled before success commit for source {}: {}",
+                            job_id, source.id, e
+                        )
+                    })?;
+
+                    upsert_source_scan_state(
+                        &pool,
+                        &source.id,
+                        "cancelled",
+                        Some(&running_at),
+                        Some(&finished_at),
+                        last_scanned_path.as_deref(),
+                        last_scanned_storage_file_id.as_deref(),
+                        last_scanned_modified_at.as_deref(),
+                        last_scanned_content_hash.as_deref(),
+                        Some("cancel requested before success commit"),
+                    )
+                    .await?;
+
+                    info!(
+                        job_id,
+                        source_id = source.id,
+                        from = "running",
+                        to = "cancelled",
+                        "scan job status transition"
+                    );
+                } else {
+                    info!(
+                        job_id,
+                        source_id = source.id,
+                        latest_status,
+                        cancel_requested = latest_cancel_requested,
+                        "skip scan success transition because job is no longer eligible"
+                    );
+                }
+                return Ok(());
+            }
+
+            upsert_source_scan_state(
+                &pool,
+                &source.id,
+                "success",
+                Some(&running_at),
+                Some(&finished_at),
+                last_scanned_path.as_deref(),
+                last_scanned_storage_file_id.as_deref(),
+                last_scanned_modified_at.as_deref(),
+                last_scanned_content_hash.as_deref(),
+                first_error.as_deref(),
+            )
+            .await?;
 
             info!(
                 job_id,
