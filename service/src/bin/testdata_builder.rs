@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use std::io::Write;
@@ -9,9 +11,10 @@ use filetime::{FileTime, set_file_mtime};
 use image::{ImageBuffer, Rgb};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 use serde::Serialize;
 
-const USAGE: &str = "Usage: cargo run --bin testdata_builder -- <output_dir> [--strategy sample|family_us_weekends_small|family_us_weekends_medium|family_us_weekends_2025] [--year 2025] [--seed 42] [--clean] [--manifest <path>]";
+const USAGE: &str = "Usage: cargo run --bin testdata_builder -- <output_dir> [--strategy sample|family_us_weekends_small|family_us_weekends_medium|family_us_weekends_2025] [--year 2025] [--seed 42] [--jobs 0] [--clean] [--manifest <path>]";
 
 #[derive(Debug)]
 struct BuilderOptions {
@@ -19,6 +22,7 @@ struct BuilderOptions {
     strategy: String,
     year: i32,
     seed: u64,
+    jobs: usize,
     clean: bool,
     manifest_path: Option<PathBuf>,
 }
@@ -47,45 +51,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let total = plans.len();
     println!(
-        "planning completed: strategy={} year={} seed={} total_photos={}",
-        options.strategy, options.year, options.seed, total
+        "planning completed: strategy={} year={} seed={} total_photos={} jobs={}",
+        options.strategy,
+        options.year,
+        options.seed,
+        total,
+        resolve_generation_jobs(options.jobs)
     );
 
     let started_at = Instant::now();
-    let mut last_progress_at = started_at;
-
-    let mut generated = 0_usize;
-    let mut generated_photos = Vec::with_capacity(total);
-    for plan in &plans {
-        let dir_path = options.output_dir.join(&plan.album_dir_name);
-        std::fs::create_dir_all(&dir_path)?;
-        let file_path = dir_path.join(format!("{}.jpg", plan.marker));
-
-        generate_marked_image(&file_path, &plan.marker)?;
-        set_exif_metadata_in_jpeg(&file_path, &plan.exif)?;
-
-        let ft = FileTime::from_unix_time(plan.mtime_unix, 0);
-        set_file_mtime(&file_path, ft)?;
-        generated_photos.push(GeneratedPhoto {
-            album_dir_name: plan.album_dir_name.clone(),
-            marker: plan.marker.clone(),
-            file_path: file_path.to_string_lossy().to_string(),
-            relative_path: format!("{}/{}.jpg", plan.album_dir_name, plan.marker),
-            exif: plan.exif.clone(),
-            mtime_unix: plan.mtime_unix,
-        });
-        generated += 1;
-
-        let now = Instant::now();
-        if generated == total
-            || generated == 1
-            || generated.is_multiple_of(100)
-            || now.duration_since(last_progress_at).as_secs_f64() >= 0.8
-        {
-            last_progress_at = now;
-            render_progress(generated, total, started_at)?;
-        }
-    }
+    let progress = Arc::new(GenerationProgress::new(total, started_at));
+    let jobs = resolve_generation_jobs(options.jobs);
+    let output_dir = options.output_dir.clone();
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs).build()?;
+    let generated_photos = pool.install(|| {
+        plans
+            .par_iter()
+            .map(|plan| {
+                let photo = generate_photo(&output_dir, plan)?;
+                progress.mark_one()?;
+                Ok(photo)
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
 
     println!();
 
@@ -93,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "test data generated at {} (strategy={}, photos={})",
         options.output_dir.display(),
         options.strategy,
-        generated
+        generated_photos.len()
     );
 
     if let Some(manifest_path) = &options.manifest_path {
@@ -115,6 +103,7 @@ fn parse_options(args: Vec<String>) -> Result<BuilderOptions, String> {
         strategy: "family_us_weekends_2025".to_string(),
         year: 2025,
         seed: 42,
+        jobs: 0,
         clean: false,
         manifest_path: None,
     };
@@ -139,6 +128,13 @@ fn parse_options(args: Vec<String>) -> Result<BuilderOptions, String> {
                 options.seed = value
                     .parse()
                     .map_err(|e| format!("invalid --seed value '{value}': {e}"))?;
+                idx += 2;
+            }
+            "--jobs" => {
+                let value = parse_required_value(&args, idx, "--jobs")?;
+                options.jobs = value
+                    .parse()
+                    .map_err(|e| format!("invalid --jobs value '{value}': {e}"))?;
                 idx += 2;
             }
             "--clean" => {
@@ -168,6 +164,57 @@ fn parse_required_value<'a>(args: &'a [String], idx: usize, flag: &str) -> Resul
         return Err(format!("{flag} requires a value"));
     }
     Ok(value)
+}
+
+struct GenerationProgress {
+    total: usize,
+    started_at: Instant,
+    generated: AtomicUsize,
+    last_progress_at: Mutex<Instant>,
+}
+
+impl GenerationProgress {
+    fn new(total: usize, started_at: Instant) -> Self {
+        Self {
+            total,
+            started_at,
+            generated: AtomicUsize::new(0),
+            last_progress_at: Mutex::new(started_at),
+        }
+    }
+
+    fn mark_one(&self) -> Result<(), String> {
+        let generated = self.generated.fetch_add(1, Ordering::SeqCst) + 1;
+        let now = Instant::now();
+        let mut last_progress_at = self
+            .last_progress_at
+            .lock()
+            .map_err(|_| "progress lock poisoned".to_string())?;
+        if generated == self.total
+            || generated == 1
+            || generated.is_multiple_of(100)
+            || now.duration_since(*last_progress_at).as_secs_f64() >= 0.8
+        {
+            *last_progress_at = now;
+            render_progress(generated, self.total, self.started_at).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+fn resolve_generation_jobs(configured: usize) -> usize {
+    if configured > 0 {
+        return configured;
+    }
+
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    if logical <= 2 {
+        logical.max(1)
+    } else {
+        logical.saturating_sub(1).max(2)
+    }
 }
 
 fn render_progress(
@@ -211,6 +258,31 @@ fn render_progress(
     );
     std::io::stdout().flush()?;
     Ok(())
+}
+
+fn generate_photo(output_dir: &Path, plan: &PhotoPlan) -> Result<GeneratedPhoto, String> {
+    let dir_path = output_dir.join(&plan.album_dir_name);
+    std::fs::create_dir_all(&dir_path)
+        .map_err(|e| format!("failed to create album dir {}: {}", dir_path.display(), e))?;
+    let file_path = dir_path.join(format!("{}.jpg", plan.marker));
+
+    generate_marked_image(&file_path, &plan.marker)
+        .map_err(|e| format!("failed to generate image {}: {}", file_path.display(), e))?;
+    set_exif_metadata_in_jpeg(&file_path, &plan.exif)
+        .map_err(|e| format!("failed to set exif {}: {}", file_path.display(), e))?;
+
+    let ft = FileTime::from_unix_time(plan.mtime_unix, 0);
+    set_file_mtime(&file_path, ft)
+        .map_err(|e| format!("failed to set mtime {}: {}", file_path.display(), e))?;
+
+    Ok(GeneratedPhoto {
+        album_dir_name: plan.album_dir_name.clone(),
+        marker: plan.marker.clone(),
+        file_path: file_path.to_string_lossy().to_string(),
+        relative_path: format!("{}/{}.jpg", plan.album_dir_name, plan.marker),
+        exif: plan.exif.clone(),
+        mtime_unix: plan.mtime_unix,
+    })
 }
 
 #[derive(Clone)]
