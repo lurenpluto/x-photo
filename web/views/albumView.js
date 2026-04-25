@@ -25,7 +25,7 @@ export function createAlbumView({
       .map((a) => {
         const visual = albumVisualStyle(a);
         const title = a.name || "未命名相册";
-        const count = state.albumPhotoCounts[a.id];
+        const count = Number(a.photo_count ?? state.albumPhotoCounts[a.id]);
         const countLabel = Number.isFinite(count) ? `${count} 项` : "...";
         return `
       <article class="album-card" data-album-id="${a.id}">
@@ -66,29 +66,6 @@ export function createAlbumView({
     });
   }
 
-  async function loadAlbumPhotoCounts(albums) {
-    const ids = albums.map((a) => a.id);
-    const counts = await Promise.all(
-      ids.map(async (albumId) => {
-        try {
-          const data = await api("/photos/search", {
-            method: "POST",
-            body: JSON.stringify({ album_id: albumId, page: 1, page_size: 1 }),
-          });
-          return [albumId, Number(data.total || 0)];
-        } catch (_err) {
-          return [albumId, null];
-        }
-      }),
-    );
-
-    for (const [albumId, count] of counts) {
-      if (Number.isFinite(count)) {
-        state.albumPhotoCounts[albumId] = count;
-      }
-    }
-  }
-
   async function loadAlbums() {
     el.latestAlbumsRow.innerHTML = '<div class="loading">加载最新相册...</div>';
     if (state.tab === "albums") {
@@ -96,17 +73,13 @@ export function createAlbumView({
     }
     try {
       state.albums = await api("/albums", { method: "GET" });
+      state.albumPhotoCounts = Object.fromEntries(
+        state.albums
+          .map((a) => [a.id, Number(a.photo_count)])
+          .filter(([, count]) => Number.isFinite(count)),
+      );
       renderAlbumCards(el.albumGrid, state.albums);
       renderAlbumCards(el.latestAlbumsRow, state.albums.slice(0, 8));
-
-      loadAlbumPhotoCounts(state.albums)
-        .then(() => {
-          renderAlbumCards(el.albumGrid, state.albums);
-          renderAlbumCards(el.latestAlbumsRow, state.albums.slice(0, 8));
-        })
-        .catch(() => {
-          // Count refresh is best effort.
-        });
 
       el.photoAlbumSelect.innerHTML = state.albums.length
         ? state.albums.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("")

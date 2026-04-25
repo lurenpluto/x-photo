@@ -211,6 +211,16 @@ async fn scan_and_search_should_work() {
     let albums_resp = call_json(&app, Method::GET, "/rpc/v1/albums", None).await;
     assert_eq!(albums_resp["code"], 0);
     let albums = albums_resp["data"].as_array().cloned().unwrap_or_default();
+    let test_album = albums
+        .iter()
+        .find(|a| a["name"] == "Test.Album")
+        .expect("dot-rule auto album");
+    assert_eq!(test_album["photo_count"], 1);
+    let another_album = albums
+        .iter()
+        .find(|a| a["name"] == "Another_Album")
+        .expect("underscore-rule auto album");
+    assert_eq!(another_album["photo_count"], 1);
     assert!(
         albums.iter().any(|a| a["name"] == "Test.Album"),
         "dot-rule auto album missing"
@@ -308,9 +318,9 @@ async fn generated_sample_data_should_scan_exif_and_album() {
     assert_eq!(albums_resp["code"], 0);
     let albums = albums_resp["data"].as_array().cloned().unwrap_or_default();
     assert!(
-        albums
-            .iter()
-            .any(|a| a["name"] == "Sample.Album" && a["album_date"] == "2020-02-01"),
+        albums.iter().any(|a| a["name"] == "Sample.Album"
+            && a["album_date"] == "2020-02-01"
+            && a["photo_count"] == 1),
         "sample auto album missing: {}",
         albums_resp
     );

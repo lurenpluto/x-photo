@@ -243,6 +243,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiResponseAny'
 
+  /photos/favorites:
+    get:
+      summary: 收藏照片列表
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: page_size
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoritePhotosResponse'
+
   /photos/{photo_id}:
     get:
       summary: 照片详情
@@ -256,6 +274,77 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiResponseAny'
 
+  /photos/{photo_id}/thumb:
+    get:
+      summary: 获取照片缩略图
+      description: 返回 JPEG 缩略图二进制；HEIF/HEIC 会优先使用预览缓存生成 JPEG。
+      parameters:
+        - $ref: '#/components/parameters/photo_id'
+        - in: query
+          name: max_edge
+          schema: { type: integer, minimum: 96, maximum: 2048, default: 512 }
+      responses:
+        '200':
+          description: JPEG thumbnail bytes
+          headers:
+            Cache-Control:
+              schema: { type: string }
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+
+  /photos/{photo_id}/file:
+    get:
+      summary: 获取照片原图/预览文件
+      description: 返回原始文件二进制；当 HEIF/HEIC 且预览缓存可用时可能返回 JPEG 预览。
+      parameters:
+        - $ref: '#/components/parameters/photo_id'
+      responses:
+        '200':
+          description: photo file bytes
+          headers:
+            Cache-Control:
+              schema: { type: string }
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/gif:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+            image/heic:
+              schema:
+                type: string
+                format: binary
+            image/heif:
+              schema:
+                type: string
+                format: binary
+            image/bmp:
+              schema:
+                type: string
+                format: binary
+            image/tiff:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
   /photos/{photo_id}/remark:
     patch:
       summary: 更新照片备注
@@ -267,6 +356,25 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdatePhotoRemarkRequest'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchResultResponse'
+
+  /photos/{photo_id}/favorite:
+    patch:
+      summary: 设置/取消照片收藏
+      parameters:
+        - $ref: '#/components/parameters/photo_id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePhotoFavoriteRequest'
       responses:
         '200':
           description: ok
@@ -318,7 +426,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ApiResponseAny'
+                $ref: '#/components/schemas/AlbumListResponse'
     post:
       summary: 创建相册
       requestBody:
@@ -519,6 +627,12 @@ components:
           type: string
           nullable: true
 
+    UpdatePhotoFavoriteRequest:
+      type: object
+      required: [favorite]
+      properties:
+        favorite: { type: boolean }
+
     BatchDeletePhotosRequest:
       type: object
       required: [photo_ids]
@@ -542,6 +656,7 @@ components:
       properties:
         name: { type: string }
         remark: { type: string, nullable: true }
+        cover_photo_id: { type: string, nullable: true }
         auto_created: { type: boolean }
         album_date: { type: string, nullable: true }
         rule_key: { type: string, nullable: true }
@@ -565,6 +680,103 @@ components:
         photo_ids:
           type: array
           items: { type: string }
+
+    Photo:
+      type: object
+      properties:
+        id: { type: string }
+        source_id: { type: string }
+        storage_file_id: { type: string }
+        file_path: { type: string }
+        file_name: { type: string }
+        file_ext: { type: string, nullable: true }
+        file_size: { type: integer }
+        mime_type: { type: string, nullable: true }
+        content_hash: { type: string, nullable: true }
+        shot_at: { type: string, nullable: true }
+        created_at_fs: { type: string, nullable: true }
+        modified_at_fs: { type: string, nullable: true }
+        sort_time: { type: string }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        exif_json: { type: string, nullable: true }
+        gps_lat: { type: number, nullable: true }
+        gps_lng: { type: number, nullable: true }
+        remark: { type: string, nullable: true }
+        deleted_at: { type: string, nullable: true }
+        created_at: { type: string }
+        updated_at: { type: string }
+      required:
+        - id
+        - source_id
+        - storage_file_id
+        - file_path
+        - file_name
+        - file_size
+        - sort_time
+        - created_at
+        - updated_at
+
+    FavoritePhotoItem:
+      allOf:
+        - $ref: '#/components/schemas/Photo'
+        - type: object
+          properties:
+            favorite_at: { type: string }
+          required: [favorite_at]
+
+    PagedFavoritePhotos:
+      type: object
+      properties:
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/FavoritePhotoItem'
+      required: [total, page, page_size, items]
+
+    FavoritePhotosResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data:
+          $ref: '#/components/schemas/PagedFavoritePhotos'
+      required: [code, message, data]
+
+    AlbumListItem:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        remark: { type: string, nullable: true }
+        cover_photo_id: { type: string, nullable: true }
+        auto_created: { type: boolean }
+        album_date: { type: string, nullable: true }
+        rule_key: { type: string, nullable: true }
+        photo_count: { type: integer }
+        created_at: { type: string }
+        updated_at: { type: string }
+      required:
+        - id
+        - name
+        - auto_created
+        - photo_count
+        - created_at
+        - updated_at
+
+    AlbumListResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlbumListItem'
+      required: [code, message, data]
 
     TaskJobData:
       type: object

@@ -3,138 +3,107 @@
 ## Scope and Current State
 
 - Repository root: `/home/bucky/work/x_photo`
-- `AGENTS.md` had not existed before this update and has now been created.
-- No source files were found in the repository at analysis time.
-- No Cursor rules were found at `.cursor/rules/` or `.cursorrules`.
-- No Copilot rules were found at `.github/copilot-instructions.md`.
-- The repo appears empty, so this document is intentionally stack-aware and uses project-detection fallbacks.
+- Product: local photo management and browsing app.
+- Backend: Rust service under `service/`, using Axum, SQLx SQLite, Tokio, tracing, image processing, EXIF parsing, scan/task jobs, album rules, preview/thumbnail cache, and a test data builder.
+- Frontend: static web app under `web/` using plain HTML/CSS/JavaScript. No Node package manifest is currently present.
+- Docs: project documents live under `doc/`, including `doc/OpenAPI.yaml`, `doc/问题修复跟踪.md`, test data tooling docs, task-system design, and user guides.
+- Cursor rules were not found at `.cursor/rules/` or `.cursorrules` when this file was updated.
+- Copilot rules were not found at `.github/copilot-instructions.md` when this file was updated.
 
 ## Repository Health Check
 
 Run these before deep work:
 
 - `ls -la`
-- `ls -la .*`
-- `git status` (if this is a git checkout)
-- `test -f package.json && echo "node" || true`
-- `test -f pyproject.toml && echo "python" || true`
-- `test -f Cargo.toml && echo "rust" || true`
-- `test -f go.mod && echo "go" || true`
-- `test -f Makefile && echo "make" || true`
+- `git status --short --branch`
+- `find . -maxdepth 3 -type f \( -name package.json -o -name Cargo.toml -o -name Makefile \) -print`
+- `test -f service/Cargo.toml && echo "rust-service" || true`
+- `test -f web/index.html && echo "static-web" || true`
+- `test -f doc/OpenAPI.yaml && echo "openapi-doc" || true`
 
-If any new stack is detected, extend this file with the exact checks and keep existing entries.
+If a new stack or package manager is added, extend this file with exact commands and keep existing entries.
 
 ## Command Priority and Defaults
 
-When multiple toolchains are present, choose in this order:
-
-1. `bun.lock` -> bun
-2. `pnpm-lock.yaml` -> pnpm
-3. `package-lock.json` -> npm
-4. `yarn.lock` -> yarn
-5. `pyproject.toml` + `uv.lock` -> uv
-6. `Cargo.toml` -> cargo
-7. `go.mod` -> go
-8. `Makefile` -> make
+- Rust backend commands run from `service/`.
+- Static web files can be opened directly or served by any simple static server when browser verification is needed.
+- If a future Node toolchain appears under `web/`, choose package manager by lockfile in this order: `bun.lock`, `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`.
+- Do not introduce a Node build pipeline unless the task explicitly requires it.
 
 ## Build / Lint / Test Commands
 
-### Node / TypeScript / JavaScript
+### Rust Backend (`service/`)
 
-- Install: `bun/pnpm/npm/yarn install`
-- Lint: `bun run lint`, `pnpm lint`, `npm run lint`, `yarn lint`
-- Format: `bun run format`, `pnpm format`, `npm run format`
-- Type check: `bun run typecheck`, `pnpm tsc --noEmit`, `npm run typecheck`
-- Test: `bun test`, `pnpm test`, `npm test`, `yarn test`
-- Single test: `bun test path/to/file.test.ts`, `pnpm test path/to/file.test.ts`, `npm test -- path/to/file.test.ts`, `npx jest path/to/file.test.ts`, `npx vitest run path/to/file.test.ts`
-- Build: `bun run build`, `pnpm build`, `npm run build`, `yarn build`
-
-### Python
-
-- Install: `python -m pip install -r requirements.txt`, `uv sync` if `uv.lock` exists
-- Lint: `ruff check .`, `python -m flake8 .`
-- Type check: `mypy .`, `pyright .`
-- Format: `ruff format .`
-- Test: `pytest`, `pytest -q`
-- Single test: `pytest tests/test_file.py::test_name -q`, `pytest tests/test_file.py -k "name" -q`
-- Build/package: `python -m pip wheel .`
-
-### Rust
-
-- Build: `cargo build`, `cargo build --release`
-- Lint/format: `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`
+- Format check: `cargo fmt --all -- --check`
+- Format write: `cargo fmt --all`
+- Lint: `cargo clippy --all-targets -- -D warnings`
 - Test: `cargo test`
-- Single test: `cargo test test_name -- --nocapture`, `cargo test module::tests::name -- --exact`, `cargo test --test integration_name`
-- Docs: `cargo doc --no-deps --document-private-items`
+- Targeted test examples:
+  - `cargo test --test scan_workflow manual_rescan_should_not_resume_after_previous_success -- --nocapture`
+  - `cargo test --test scan_workflow generated_sample_data_should_scan_exif_and_album -- --nocapture`
+  - `cargo test --test error_recovery cancel_scan_should_reach_cancelled -- --nocapture`
+  - `cargo test config::tests -- --nocapture`
+- Build: `cargo build`
+- Optional docs: `cargo doc --no-deps --document-private-items`
 
-### Go
+### Test Data Builder
 
-- Build: `go build ./...`
-- Lint: `gofmt -w .`, `golangci-lint run`
-- Test: `go test ./...`
-- Single test: `go test ./... -run TestName`, `go test ./pkg/name -run TestName/Case -v`
+- Generate sample data:
+  - `cargo run --bin testdata_builder -- /tmp/xphoto_test_data_sample --strategy sample --year 2025 --seed 42`
+- Generate larger weekend-family data only when intentionally testing scale; it can take minutes:
+  - `cargo run --bin testdata_builder -- /tmp/xphoto_test_data_family --strategy family_us_weekends_2025 --year 2025 --seed 42`
 
-### Make-driven projects
+### Smoke Test
 
-- Typical commands: `make fmt`, `make lint`, `make test`
-- Single test examples: `make test TEST=path/to/test`, `make test-file FILE=path/to/test.py`
+- Backend smoke script lives at `service/scripts/smoke_test.sh`.
+- Typical invocation with an already running service:
+  - `BASE_URL=http://127.0.0.1:8080/rpc/v1 DATA_DIR=/tmp/xphoto_test_data_sample TIMEOUT_SEC=60 ./scripts/smoke_test.sh`
 
-If no recognized stack is detected, inspect `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`, or Make targets before adding new tooling.
+### Static Web (`web/`)
+
+- No package manager or build command is currently defined.
+- For browser testing, serve the repo or `web/` directory with a temporary static server and keep backend URL/proxy assumptions explicit.
+- If frontend behavior changes, use browser automation when useful and capture the URL/viewport tested.
+
+## Documentation Commands
+
+- OpenAPI source of truth is `service/src/api/mod.rs` plus handler request/response types in `service/src/api/types.rs`.
+- When API routes change, update `doc/OpenAPI.yaml` in the same task.
+- Track project issues and repair status in `doc/问题修复跟踪.md`.
 
 ## Code Style Guidelines
 
-### Imports
+### Rust
 
-- Keep import grouping deterministic and predictable: standard library, third-party, local project.
-- Sort imports within groups alphabetically.
-- Prefer explicit imports over wildcard imports when available.
-- Keep side-effect imports isolated and uncommon.
+- Follow `cargo fmt` and `cargo clippy --all-targets -- -D warnings`.
+- Prefer typed request/response structs at API boundaries.
+- Keep SQL errors wrapped with operation and identifiers; log meaningful runtime failures with `tracing`.
+- Add or update focused tests for behavior changes, especially scan/task state transitions and API contracts.
 
-### Formatting
+### JavaScript / Web
 
-- Respect existing formatter config as authoritative (`.editorconfig`, prettier, ruff, gofmt, rustfmt, clang-format, etc.).
-- Avoid mixed style choices inside a file.
-- Prefer formatting tools over hand alignment.
-- Keep one statement per line unless formatting rules require a different form.
+- Keep the current static app style unless a larger frontend migration is explicitly requested.
+- Avoid introducing dependencies for small UI/API fixes.
+- Keep API paths aligned with `/rpc/v1` routes in the Rust service.
 
-### Typing
+### Docs
 
-- Enable strict type checks when project tooling supports it.
-- Add type annotations for public and boundary-facing functions.
-- Use typed DTOs/models for data contracts across modules and services.
-- Avoid permissive escape hatches (`any`, broad `object`, `interface{}`) unless justified by boundary constraints.
+- Keep Markdown concise and executable: include exact commands and status evidence.
+- For `doc/问题修复跟踪.md`, new issues start as `TODO`, active work may use `IN_PROGRESS`, and completed verified items should be marked `VERIFIED` with command evidence.
 
-### Naming
+## PR/Task Verification Checklist
 
-- Use descriptive, intention-driven names (no unnecessary abbreviations).
-- Match project separator conventions for filenames (`snake_case`, `kebab-case`, etc.).
-- Keep variables and functions readable; use full words when possible.
-- Use stable names at API boundaries unless a migration requires rename.
-- Prefer noun phrases for types/classes, verbs for functions/methods.
-
-### Error Handling
-
-- Fail fast and surface a clear action path in errors.
-- Wrap errors with context (`operation`, `resource`, `identifiers`).
-- Avoid broad `catch`/`except` that swallows every failure.
-- In async code, propagate cancellation and timeout behavior.
-- Map internal failures to user-safe messages for API boundaries.
-
-### Testing Guidance
-
-- Add/adjust tests for new behavior and each failure branch touched.
-- Keep assertions explicit and descriptive.
-- Prefer deterministic fixtures and avoid timing-based randomness.
-- Prioritize targeted tests for critical logic before broad refactors.
-
-### PR/Task Verification Checklist
-
-- Run stack-matched lint or format command for modified code.
-- Run at least one targeted single test for changed logic.
-- Run the relevant full test command before handing work over.
-- Re-run repository health checks when build tooling changes.
+- Run `git diff --check` before handoff.
+- For backend code changes, run:
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --all-targets -- -D warnings`
+  - targeted tests for changed logic
+  - `cargo test` before final handoff when feasible
+- For docs-only changes, run at least `git diff --check` and any lightweight structural checks available.
+- Keep unrelated generated files and temporary test data out of commits.
 
 ## Extending This File
 
-- Any new stack should add its install/lint/format/test/single-test/build commands to this file.
 - If Cursor/Copilot rule files are added, append their constraints here immediately.
+- If `web/` gains a package manager, add install/lint/typecheck/test/build commands here.
+- If deployment scripts or service units are added, document the exact verification and startup commands here.

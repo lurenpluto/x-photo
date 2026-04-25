@@ -113,6 +113,20 @@ pub struct AlbumSimple {
     pub name: String,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct AlbumListItem {
+    pub id: String,
+    pub name: String,
+    pub remark: Option<String>,
+    pub cover_photo_id: Option<String>,
+    pub auto_created: bool,
+    pub album_date: Option<String>,
+    pub rule_key: Option<String>,
+    pub photo_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct PhotoDetailData {
     pub photo: crate::domain::models::Photo,

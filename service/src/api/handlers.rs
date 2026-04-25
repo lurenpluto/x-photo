@@ -28,7 +28,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::api::AppState;
 use crate::api::types::{
-    ActiveTaskQuery, AlbumDetailData, AlbumPhotosRequest, AlbumSimple, ApiResponse,
+    ActiveTaskQuery, AlbumDetailData, AlbumListItem, AlbumPhotosRequest, AlbumSimple, ApiResponse,
     BatchAddToAlbumRequest, BatchDeletePhotosRequest, BatchOperationResult, CreateAlbumRequest,
     CreateSourceRequest, DaemonTaskHealthItem, FavoritePhotoItem, FsWatchScanTriggerRequest,
     PagedData, PaginationQuery, PhotoDetailData, PhotoSearchRequest, ScanTriggerResponse,
@@ -1825,12 +1825,17 @@ pub async fn get_album_detail(
 
 pub async fn list_albums(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<Vec<Album>>>, (StatusCode, Json<ApiResponse<Value>>)> {
+) -> Result<Json<ApiResponse<Vec<AlbumListItem>>>, (StatusCode, Json<ApiResponse<Value>>)> {
     info!("list_albums requested");
-    let rows = sqlx::query_as::<_, Album>(
-        "SELECT id, name, remark, cover_photo_id, auto_created, album_date, rule_key, created_at, updated_at
-         FROM albums
-         ORDER BY created_at DESC
+    let rows = sqlx::query_as::<_, AlbumListItem>(
+        "SELECT a.id, a.name, a.remark, a.cover_photo_id, a.auto_created, a.album_date, a.rule_key,
+                COUNT(p.id) AS photo_count,
+                a.created_at, a.updated_at
+         FROM albums a
+         LEFT JOIN photo_albums pa ON pa.album_id = a.id
+         LEFT JOIN photos p ON p.id = pa.photo_id AND p.deleted_at IS NULL
+         GROUP BY a.id, a.name, a.remark, a.cover_photo_id, a.auto_created, a.album_date, a.rule_key, a.created_at, a.updated_at
+         ORDER BY a.created_at DESC
          LIMIT 200",
     )
     .fetch_all(&state.pool)
