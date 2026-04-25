@@ -52,8 +52,8 @@ hash_batch_size = 32
 resume_enabled = true
 task_dispatch_interval_ms = 2000
 task_stale_seconds = 120
-source_change_detect_enabled = true
-source_change_detect_interval_ms = 10000
+source_change_detect_enabled = false
+source_change_detect_interval_ms = 30000
 
 [album_rules]
 enabled = true

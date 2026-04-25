@@ -1,0 +1,72 @@
+{
+  "label": "pilot-scenarios-2",
+  "generated_at": "2026-04-25T14:54:10.769852+00:00",
+  "data_root": "/home/bucky/.xphoto/test_data",
+  "profile": "stress",
+  "mode": "scenarios",
+  "base_url": "http://127.0.0.1:58090/rpc/v1",
+  "elapsed_sec": 2,
+  "expected": {
+    "photos": 152,
+    "albums_manifest_sum": 13,
+    "summary": "/home/bucky/.xphoto/test_data/_manifests/_summary_stress.json"
+  },
+  "actual": {
+    "api_search_total": 152,
+    "job_failed_count_sum": 0,
+    "job_new_count_sum": 152,
+    "job_updated_count_sum": 0,
+    "job_processed_count_sum": 152,
+    "db": {
+      "sources": 2,
+      "active_photos": 152,
+      "deleted_photos": 0,
+      "albums": 13,
+      "photo_albums": 152,
+      "favorites": 0,
+      "fts_rows": 152,
+      "duplicate_storage_groups": 0
+    }
+  },
+  "checks": {
+    "all_jobs_success": true,
+    "job_failed_count_zero": true,
+    "api_search_total_matches_expected": true,
+    "db_active_photo_count_matches_expected": true,
+    "fts_rows_match_active_photos": true,
+    "duplicate_storage_groups_zero": true
+  },
+  "passed": true,
+  "db_path": "/tmp/xphoto_scan_stress_pilot-scenarios-2.7i4kiq/stress.db",
+  "log_dir": "/tmp/xphoto_scan_stress_pilot-scenarios-2.7i4kiq/logs",
+  "jobs": [
+    {
+      "scenario": "sample",
+      "source_id": "77bfcf26c2134a44a9fa4af2063e2436805d65419e1edb303d3b950ae27714f3",
+      "job_id": "4ae72e1c10e9d2de0e87ecbea476b23d7e3d9f3b6a6bcf4667156066029f96ee",
+      "status": "success",
+      "processed_count": 1,
+      "total_count": 1,
+      "new_count": 1,
+      "updated_count": 0,
+      "failed_count": 0,
+      "error_message": null,
+      "started_at": "2026-04-25T14:54:08.598866286+00:00",
+      "finished_at": "2026-04-25T14:54:08.603944375+00:00"
+    },
+    {
+      "scenario": "family-medium-2024",
+      "source_id": "6dcded2fb9585caf07251790686c5d25303f68163059f4cc5e65a1f5ae674996",
+      "job_id": "b63b8cb38a990380414202d33f2e2a76ab7b86611900a1b5e61fe99502af4319",
+      "status": "success",
+      "processed_count": 151,
+      "total_count": 151,
+      "new_count": 151,
+      "updated_count": 0,
+      "failed_count": 0,
+      "error_message": null,
+      "started_at": "2026-04-25T14:54:08.662099656+00:00",
+      "finished_at": "2026-04-25T14:54:08.810203728+00:00"
+    }
+  ]
+}

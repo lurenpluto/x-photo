@@ -3659,12 +3659,13 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
 
     match collect_result {
         Ok(result) => {
+            let collect_elapsed_ms = collect_phase_started_at.elapsed().as_millis();
             info!(
                 job_id,
                 source_id = source.id,
                 collected_entries = result.entries.len(),
                 collect_failed_count = result.failed_count,
-                elapsed_ms = collect_phase_started_at.elapsed().as_millis(),
+                elapsed_ms = collect_elapsed_ms,
                 "scan collect phase completed"
             );
 
@@ -3685,6 +3686,13 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
             let mut failed_count: i64 = result.failed_count;
             let mut first_error = result.first_error;
             let mut processed_count: i64 = 0;
+            let mut hash_batch_count: i64 = 0;
+            let mut hash_total_elapsed_ms: u128 = 0;
+            let mut db_upsert_elapsed_ms: u128 = 0;
+            let mut album_link_elapsed_ms: u128 = 0;
+            let mut index_sync_elapsed_ms: u128 = 0;
+            let mut delete_sync_elapsed_ms: u128 = 0;
+            let mut cover_fix_elapsed_ms: u128 = 0;
             let collect_target_count = result.entries.len() as i64;
             let total_count = collect_target_count;
             let mut auto_album_link_count: i64 = 0;
@@ -3861,6 +3869,8 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                     )
                 })?;
                 let hash_batch_elapsed_ms = hash_batch_started_at.elapsed().as_millis();
+                hash_batch_count += 1;
+                hash_total_elapsed_ms += hash_batch_elapsed_ms;
 
                 for outcome in batch_results {
                     let (entry, maybe_candidate, existing_meta, candidate_error) = match outcome {
@@ -3906,6 +3916,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
 
                         let photo_id = build_photo_id(&source.id, &candidate.storage_file_id);
                         let now = Utc::now().to_rfc3339();
+                        let upsert_started_at = Instant::now();
                         let upsert_result = sqlx::query(
                             "INSERT INTO photos (
                                 id, source_id, storage_file_id, file_path, file_name, file_ext, file_size, mime_type,
@@ -3953,6 +3964,7 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                         .bind(&now)
                         .execute(&pool)
                         .await;
+                        db_upsert_elapsed_ms += upsert_started_at.elapsed().as_millis();
 
                         if let Err(e) = upsert_result {
                             failed_count += 1;
@@ -3978,7 +3990,8 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                                 Some(&source.root_path),
                             );
 
-                            match ensure_album_by_dir_rule(
+                            let album_link_started_at = Instant::now();
+                            let album_link_result = ensure_album_by_dir_rule(
                                 &pool,
                                 &source.id,
                                 &candidate.file_path,
@@ -3986,8 +3999,10 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                                 &album_rule_patterns,
                                 &mut album_cache,
                             )
-                            .await
-                            {
+                            .await;
+                            album_link_elapsed_ms += album_link_started_at.elapsed().as_millis();
+
+                            match album_link_result {
                                 Ok(album_id) => {
                                     if let Some(album_id) = album_id {
                                         auto_album_link_count += 1;
@@ -4091,7 +4106,11 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                             .iter()
                             .cloned()
                             .collect::<Vec<_>>();
-                        if let Err(e) = insert_photo_search_index_for_photo_ids(&pool, &ids).await {
+                        let index_sync_started_at = Instant::now();
+                        let index_sync_result =
+                            insert_photo_search_index_for_photo_ids(&pool, &ids).await;
+                        index_sync_elapsed_ms += index_sync_started_at.elapsed().as_millis();
+                        if let Err(e) = index_sync_result {
                             warn!(job_id, source_id = source.id, error = %e, "failed to insert incremental photo search index for new photos");
                         } else {
                             pending_index_new_photo_ids.clear();
@@ -4102,8 +4121,11 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                             .iter()
                             .cloned()
                             .collect::<Vec<_>>();
-                        if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await
-                        {
+                        let index_sync_started_at = Instant::now();
+                        let index_sync_result =
+                            rebuild_photo_search_index_for_photo_ids(&pool, &ids).await;
+                        index_sync_elapsed_ms += index_sync_started_at.elapsed().as_millis();
+                        if let Err(e) = index_sync_result {
                             warn!(job_id, source_id = source.id, error = %e, "failed to refresh incremental photo search index for updated photos");
                         } else {
                             pending_index_updated_photo_ids.clear();
@@ -4114,7 +4136,10 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
 
             if !pending_index_new_photo_ids.is_empty() {
                 let ids = pending_index_new_photo_ids.into_iter().collect::<Vec<_>>();
-                if let Err(e) = insert_photo_search_index_for_photo_ids(&pool, &ids).await {
+                let index_sync_started_at = Instant::now();
+                let index_sync_result = insert_photo_search_index_for_photo_ids(&pool, &ids).await;
+                index_sync_elapsed_ms += index_sync_started_at.elapsed().as_millis();
+                if let Err(e) = index_sync_result {
                     warn!(job_id, source_id = source.id, error = %e, "failed to insert photo search index for remaining new photos");
                 }
             }
@@ -4123,7 +4148,10 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                 let ids = pending_index_updated_photo_ids
                     .into_iter()
                     .collect::<Vec<_>>();
-                if let Err(e) = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await {
+                let index_sync_started_at = Instant::now();
+                let index_sync_result = rebuild_photo_search_index_for_photo_ids(&pool, &ids).await;
+                index_sync_elapsed_ms += index_sync_started_at.elapsed().as_millis();
+                if let Err(e) = index_sync_result {
                     warn!(job_id, source_id = source.id, error = %e, "failed to refresh photo search index for remaining updated photos");
                 }
             }
@@ -4140,7 +4168,11 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                     })
                     .collect::<Vec<_>>();
                 if !missing_photo_ids.is_empty() {
-                    match mark_missing_photos_deleted(&pool, &source.id, &missing_photo_ids).await {
+                    let delete_sync_started_at = Instant::now();
+                    let delete_sync_result =
+                        mark_missing_photos_deleted(&pool, &source.id, &missing_photo_ids).await;
+                    delete_sync_elapsed_ms += delete_sync_started_at.elapsed().as_millis();
+                    match delete_sync_result {
                         Ok(deleted_count) => {
                             updated_count += deleted_count;
                             info!(
@@ -4162,7 +4194,10 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
             }
 
             for album_id in &touched_auto_album_ids {
-                if let Err(e) = set_random_album_cover_if_missing(&pool, album_id).await {
+                let cover_fix_started_at = Instant::now();
+                let cover_fix_result = set_random_album_cover_if_missing(&pool, album_id).await;
+                cover_fix_elapsed_ms += cover_fix_started_at.elapsed().as_millis();
+                if let Err(e) = cover_fix_result {
                     warn!(job_id, source_id = source.id, album_id, error = %e, "failed to set random cover for auto album");
                 }
             }
@@ -4336,6 +4371,44 @@ async fn run_scan_job(options: ScanRunOptions) -> Result<(), String> {
                 first_error.as_deref(),
             )
             .await?;
+
+            let total_elapsed_ms = collect_phase_started_at.elapsed().as_millis();
+            let write_elapsed_ms = scan_started_at.elapsed().as_millis();
+            let throughput_per_sec = if total_elapsed_ms > 0 {
+                (processed_count as f64 / (total_elapsed_ms as f64 / 1000.0) * 10.0).round() / 10.0
+            } else {
+                0.0
+            };
+
+            info!(
+                job_id,
+                source_id = source.id,
+                status = "success",
+                total_elapsed_ms,
+                collect_elapsed_ms,
+                write_elapsed_ms,
+                throughput_per_sec,
+                total_count,
+                processed_count,
+                new_count,
+                updated_count,
+                skipped_count,
+                failed_count,
+                auto_album_link_count,
+                touched_auto_album_count = touched_auto_album_ids.len(),
+                existing_count = existing_by_storage.len(),
+                hash_batch_count,
+                hash_batch_size,
+                hash_parallelism = effective_hash_parallelism,
+                hash_total_elapsed_ms,
+                db_upsert_elapsed_ms,
+                album_link_elapsed_ms,
+                index_sync_elapsed_ms,
+                delete_sync_elapsed_ms,
+                cover_fix_elapsed_ms,
+                first_error = first_error.as_deref().unwrap_or(""),
+                "scan job performance summary"
+            );
 
             info!(
                 job_id,
